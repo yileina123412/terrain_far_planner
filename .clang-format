@@ -1,0 +1,6 @@
+BasedOnStyle: Google
+IndentWidth: 4
+AccessModifierOffset: -4
+AlignAfterOpenBracket: DontAlign
+AllowShortFunctionsOnASingleLine: Empty
+ColumnLimit: 120  # <--- 增加行宽限制到 120 或更高
