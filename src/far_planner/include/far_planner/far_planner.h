@@ -50,6 +50,12 @@ private:
     ros::Publisher runtime_pub_, planning_time_pub_, traverse_time_pub_, reach_goal_pub_;
     ros::Publisher risk_debug_pub_;
     ros::Publisher rgb_risk_debug_pub_;  // 新增RGB点云发布器
+    // 发布五个cv图对应的点云
+    ros::Publisher obstacle_pub_;
+    ros::Publisher occlusion_pub_;
+    ros::Publisher steep_slope_pub_;
+    ros::Publisher moderate_slope_pub_;
+    ros::Publisher flat_terrain_pub_;
 
     ros::Timer planning_event_;
     std_msgs::Float32 runtimer_, plan_timer_;

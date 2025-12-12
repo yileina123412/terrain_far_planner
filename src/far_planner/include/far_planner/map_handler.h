@@ -23,6 +23,19 @@ struct MapHandlerParams {
 class MapHandler {
 public:
     PointCloudPtr ave_high_terrain_cloud_;
+    // [新增] 五类地形的 CV 图
+    cv::Mat obstacle_mask_;            // 障碍物（红色）
+    cv::Mat occlusion_boundary_mask_;  // 遮挡边界（绿色）- 已有
+    cv::Mat steep_slope_mask_;         // 陡坡（黄色）
+    cv::Mat moderate_slope_mask_;      // 缓坡（蓝色）
+    cv::Mat flat_terrain_mask_;        // 平地（白色）
+
+    // [新增] 五类地形的点云
+    PointCloudRGB obstacle_cloud_;
+    PointCloudRGB occlusion_cloud_;
+    PointCloudRGB steep_slope_cloud_;
+    PointCloudRGB moderate_slope_cloud_;
+    PointCloudRGB flat_terrain_cloud_rgb_;
     MapHandler() = default;
     ~MapHandler() = default;
 
@@ -127,8 +140,7 @@ public:
      */
     void ClearObsCellThroughPosition(const Point3D& point);
 
-    void GridToImg(const std::unique_ptr<grid_ns::Grid<std::vector<float>>>& grid, cv::Mat& height_img,
-        cv::Mat& var_img, cv::Mat& mask_img);
+    void GridToImg(cv::Mat& height_img, cv::Mat& var_img, cv::Mat& mask_img);
 
     void ComputeTerrainRiskAttributes();
 
@@ -136,6 +148,45 @@ public:
 
     PointCloudPtr GetRiskCloud();
     PointCloudRGB GetRiskRBGCloud();
+    PointCloudPtr GetAveHeightCloud();
+
+    // [新增] 获取五类地形的 CV 图
+    cv::Mat GetObstacleMask() const {
+        return obstacle_mask_;
+    }
+    cv::Mat GetOcclusionBoundaryMask() const {
+        return occlusion_boundary_mask_;
+    }
+    cv::Mat GetSteepSlopeMask() const {
+        return steep_slope_mask_;
+    }
+    cv::Mat GetModerateSlopeMask() const {
+        return moderate_slope_mask_;
+    }
+    cv::Mat GetFlatTerrainMask() const {
+        return flat_terrain_mask_;
+    }
+
+    // [新增] 获取五类地形的点云
+    PointCloudRGB GetObstacleCloud() const {
+        return obstacle_cloud_;
+    }
+    PointCloudRGB GetOcclusionCloud() const {
+        return occlusion_cloud_;
+    }
+    PointCloudRGB GetSteepSlopeCloud() const {
+        return steep_slope_cloud_;
+    }
+    PointCloudRGB GetModerateSlopeCloud() const {
+        return moderate_slope_cloud_;
+    }
+    PointCloudRGB GetFlatTerrainCloudRGB() const {
+        return flat_terrain_cloud_rgb_;
+    }
+
+    PointCloudPtr GetObsOutCloud() const {
+        return obstacle_cloud_output_;
+    }
 
 private:
     MapHandlerParams map_params_;
@@ -150,9 +201,18 @@ private:
     Point3D initial_robot_pos_;
 
     cv::Mat risk_mask_mat_;
+    cv::Mat raw_h, inner_diff, valid_mask;
+
+    cv::Mat grad_x, grad_y, slope_mat;
+    // 坡度风险，高度风险，最终风险
+    cv::Mat slope_risk, step_risk, final_risk;
     PointCloudPtr risk_cloud_;
+    PointCloudPtr obstacle_cloud_output_;
     PointCloudRGB risk_cloud_rgb_;
     // ros::Publisher risk_debug_pub_;
+
+    cv::Mat point_density_mat_;  // [新增] 点云密度图
+    // cv::Mat occlusion_boundary_mask_;  // [新增] 遮挡边界掩膜
 
     template <typename Position>
     static inline float NearestHeightOfPoint(const Position& p, float& dist_square) {

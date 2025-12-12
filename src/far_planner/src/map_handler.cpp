@@ -61,6 +61,7 @@ void MapHandler::Init(const MapHandlerParams& params) {
     INFLATE_N = 1;
     flat_terrain_cloud_ = PointCloudPtr(new pcl::PointCloud<PCLPoint>());
     risk_cloud_ = PointCloudPtr(new pcl::PointCloud<PCLPoint>());
+    obstacle_cloud_output_ = PointCloudPtr(new pcl::PointCloud<PCLPoint>());
     risk_cloud_rgb_ = PointCloudRGB(new pcl::PointCloud<pcl::PointXYZRGB>());
     ave_high_terrain_cloud_ = PointCloudPtr(new pcl::PointCloud<PCLPoint>());
     kdtree_terrain_clould_ = PointKdTreePtr(new pcl::KdTreeFLANN<PCLPoint>());
@@ -69,6 +70,13 @@ void MapHandler::Init(const MapHandlerParams& params) {
     // 风险评估
     risk_map_ready_ = false;
     initial_robot_pos_ = Point3D(0, 0, 0);  // 会在第一次更新时设置
+
+    // [新增] 初始化五类地形点云
+    obstacle_cloud_ = PointCloudRGB(new pcl::PointCloud<pcl::PointXYZRGB>());
+    occlusion_cloud_ = PointCloudRGB(new pcl::PointCloud<pcl::PointXYZRGB>());
+    steep_slope_cloud_ = PointCloudRGB(new pcl::PointCloud<pcl::PointXYZRGB>());
+    moderate_slope_cloud_ = PointCloudRGB(new pcl::PointCloud<pcl::PointXYZRGB>());
+    flat_terrain_cloud_rgb_ = PointCloudRGB(new pcl::PointCloud<pcl::PointXYZRGB>());
 }
 
 void MapHandler::ResetGripMapCloud() {
@@ -251,7 +259,7 @@ void MapHandler::UpdateFreeCloudGrid(const PointCloudPtr& freeCloudIn) {
             FARUtil::FilterCloud(world_free_cloud_grid_->GetCell(i), FARUtil::kLeafSize);
     }
 }
-
+// 获得对应点的高度信息
 float MapHandler::TerrainHeightOfPoint(const Point3D& p, bool& is_matched, const bool& is_search) {
     is_matched = false;
     const Eigen::Vector3i sub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(p.x, p.y, 0.0f));
@@ -448,6 +456,7 @@ void MapHandler::UpdateTerrainHeightGrid(const PointCloudPtr& freeCloudIn, const
     this->ObsNeighborCloudWithTerrain(neighbor_obs_indices_, extend_obs_indices_);
 }
 
+// 计算terrain_height_grid_中的平均高度
 void MapHandler::CalculateAveHigh() {
     const Eigen::Vector3i robot_sub =
         terrain_height_grid_->Pos2Sub(Eigen::Vector3d(FARUtil::robot_pos.x, FARUtil::robot_pos.y, 0.0f));
@@ -609,41 +618,80 @@ void MapHandler::RemoveObsCloudFromGrid(const PointCloudPtr& obsCloud) {
     }
 }
 
-void MapHandler::GridToImg(const std::unique_ptr<grid_ns::Grid<std::vector<float>>>& grid, cv::Mat& height_img,
-    cv::Mat& var_img, cv::Mat& mask_img) {
-    const Eigen::Vector3i dim = grid->GetSize();
+// void MapHandler::GridToImg(cv::Mat& height_img, cv::Mat& var_img, cv::Mat& mask_img) {
+//     const Eigen::Vector3i dim = terrain_height_grid_->GetSize();
+//     height_img = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
+//     var_img = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
+//     mask_img = cv::Mat::zeros(dim.y(), dim.x(), CV_8UC1);
+
+//     // [新增] 记录点云密度
+//     cv::Mat density_img = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
+
+//     for (const auto& point : ave_high_terrain_cloud_->points) {
+//         // 获取行列坐标 (注意 OpenCV 行列与 Grid x,y 的对应)
+//         Eigen::Vector3i sub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, 0.0f));
+//         if (!terrain_height_grid_->InRange(sub)) continue;
+
+//         int r = sub.y();  // row -> y
+//         int c = sub.x();  // col -> x
+
+//         // 平均高度直接从点云获取
+//         height_img.at<float>(r, c) = point.z;
+
+//         // 格内落差需要从原始 grid 获取
+//         int ind = terrain_height_grid_->Sub2Ind(sub);
+//         const auto& heights = terrain_height_grid_->GetCell(ind);
+//         if (!heights.empty()) {
+//             float min_z = *std::min_element(heights.begin(), heights.end());
+//             float max_z = *std::max_element(heights.begin(), heights.end());
+//             var_img.at<float>(r, c) = max_z - min_z;
+//         }
+
+//         mask_img.at<uchar>(r, c) = 255;  // 有效标记
+//     }
+// }
+
+void MapHandler::GridToImg(cv::Mat& height_img, cv::Mat& var_img, cv::Mat& mask_img) {
+    const Eigen::Vector3i dim = terrain_height_grid_->GetSize();
     height_img = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
     var_img = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
     mask_img = cv::Mat::zeros(dim.y(), dim.x(), CV_8UC1);
 
-    for (int i = 0; i < grid->GetCellNumber(); ++i) {
-        if (terrain_grid_occupy_list_[i] == 0) continue;
-        // 获取行列坐标 (注意 OpenCV 行列与 Grid x,y 的对应)
-        Eigen::Vector3i sub = grid->Ind2Sub(i);
-        int r = sub.y();  // row -> y
-        int c = sub.x();  // col -> x
+    // [新增] 记录点云密度
+    point_density_mat_ = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
 
-        const auto& points = grid->GetCell(i);
-        if (!points.empty()) {
-            float min_z = 10000, max_z = -10000, sum = 0;
-            for (float z : points) {
-                if (z < min_z) min_z = z;
-                if (z > max_z) max_z = z;
-                sum += z;
-            }
-            height_img.at<float>(r, c) = sum / points.size();  // 平均高度
-            var_img.at<float>(r, c) = max_z - min_z;           // 格内落差
-            mask_img.at<uchar>(r, c) = 255;                    // 有效标记
+    for (const auto& point : ave_high_terrain_cloud_->points) {
+        Eigen::Vector3i sub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, 0.0f));
+        if (!terrain_height_grid_->InRange(sub)) continue;
+
+        int r = sub.y();
+        int c = sub.x();
+
+        height_img.at<float>(r, c) = point.z;
+
+        // 格内落差需要从原始 grid 获取
+        int ind = terrain_height_grid_->Sub2Ind(sub);
+        const auto& heights = terrain_height_grid_->GetCell(ind);
+        if (!heights.empty()) {
+            float min_z = *std::min_element(heights.begin(), heights.end());
+            float max_z = *std::max_element(heights.begin(), heights.end());
+            var_img.at<float>(r, c) = max_z - min_z;
+
+            // [新增] 记录点云数量
+            point_density_mat_.at<float>(r, c) = heights.size();
         }
+
+        mask_img.at<uchar>(r, c) = 255;
     }
 }
 
+// 计算通行性的图
 void MapHandler::ComputeTerrainRiskAttributes() {
     if (!terrain_height_grid_) return;
 
     // inner_diff:悬崖图
-    cv::Mat raw_h, inner_diff, valid_mask;
-    GridToImg(terrain_height_grid_, raw_h, inner_diff, valid_mask);
+
+    GridToImg(raw_h, inner_diff, valid_mask);
 
     // 1. 填补空洞 (形态学闭运算)
     // 解决车底黑洞问题，但不乱补悬崖外
@@ -652,6 +700,38 @@ void MapHandler::ComputeTerrainRiskAttributes() {
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5));
     // 执行闭运算：先膨胀再腐蚀
     cv::morphologyEx(valid_mask, closed_mask, cv::MORPH_CLOSE, kernel);
+
+    // ============================================================
+    // [新增] 检测遮挡边界：点云密度突然从有到无的地方
+    occlusion_boundary_mask_ = cv::Mat::zeros(valid_mask.rows, valid_mask.cols, CV_8UC1);
+
+    float min_density_threshold = 2.0;  // 点云密度阈值
+    for (int r = 1; r < valid_mask.rows - 1; r++) {
+        for (int c = 1; c < valid_mask.cols - 1; c++) {
+            // 只检查有效数据格子
+            if (valid_mask.at<uchar>(r, c) == 255 && point_density_mat_.at<float>(r, c) >= min_density_threshold) {
+                // 检查四个方向的邻居，如果有无效格子，说明是边界
+                bool is_boundary = false;
+                if (valid_mask.at<uchar>(r - 1, c) == 0 ||  // 上
+                    valid_mask.at<uchar>(r + 1, c) == 0 ||  // 下
+                    valid_mask.at<uchar>(r, c - 1) == 0 ||  // 左
+                    valid_mask.at<uchar>(r, c + 1) == 0) {  // 右
+                    is_boundary = true;
+                }
+
+                if (is_boundary) {
+                    occlusion_boundary_mask_.at<uchar>(r, c) = 255;
+                }
+            }
+        }
+    }
+    // 膨胀边界掩膜，扩大清除范围（比如扩2-3个格子）
+    cv::Mat dilate_boundary_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(7, 7));
+    cv::dilate(occlusion_boundary_mask_, occlusion_boundary_mask_, dilate_boundary_kernel);
+    if (FARUtil::IsDebug) {
+        int boundary_count = cv::countNonZero(occlusion_boundary_mask_);
+        ROS_INFO_THROTTLE(2.0, "MH: Detected %d occlusion boundary cells", boundary_count);
+    }
 
     // 2. 生成平滑后的高度图 (用于算坡度)
     // 我们需要一张“连续”的高度图来算坡度，不能有断层。
@@ -690,7 +770,7 @@ void MapHandler::ComputeTerrainRiskAttributes() {
     }
 
     // 3. 计算坡度 (Slope)  坡度图
-    cv::Mat grad_x, grad_y, slope_mat;
+    // cv::Mat grad_x, grad_y, slope_mat;
     float res = terrain_height_grid_->GetResolution().x();
     cv::Sobel(filled_h, grad_x, CV_32F, 1, 0, 3, 1.0 / (8.0 * res));
     cv::Sobel(filled_h, grad_y, CV_32F, 0, 1, 3, 1.0 / (8.0 * res));
@@ -726,12 +806,12 @@ void MapHandler::ComputeTerrainRiskAttributes() {
     }
 
     // 4. 生成 Risk Mask
-    cv::Mat slope_risk, step_risk, final_risk;
+
     // 阈值：坡度 > 0.5 (约26度)，格内落差 > 0.3m
     cv::threshold(slope_mat, slope_risk, 0.5, 255, cv::THRESH_BINARY);
     cv::threshold(inner_diff, step_risk, 0.3, 255, cv::THRESH_BINARY);
 
-    // [新增] 去除红色零星噪点
+    // 去除红色零星噪点
     // 定义一个很小的核，比如 3x3
     cv::Mat remove_noise_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
     // 执行开运算：消除孤立点
@@ -740,7 +820,16 @@ void MapHandler::ComputeTerrainRiskAttributes() {
     slope_risk.convertTo(slope_risk, CV_8UC1);
     step_risk.convertTo(step_risk, CV_8UC1);
 
-    // [修改] 检查是否需要屏蔽陡坡风险（黄色）
+    // [新增步骤]：粘合黄色区域 (Morphological Glue)
+    // 目的：把断断续续的坡度噪点连成一个完整的“可通行坡面”
+    // =========================================================
+    // cv::Mat glue_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+    // cv::dilate(slope_risk, slope_risk, glue_kernel);
+    // cv::erode(slope_risk, slope_risk, glue_kernel);
+    // 闭运算 = 先膨胀后腐蚀，能填补内部小黑洞，连接断裂的线
+    // cv::morphologyEx(slope_risk, slope_risk, cv::MORPH_CLOSE, glue_kernel);
+
+    // [修改] 初始化：检查是否需要屏蔽陡坡风险（黄色）
     if (!risk_map_ready_) {
         float dist_moved = sqrt(
             pow(FARUtil::robot_pos.x - initial_robot_pos_.x, 2) + pow(FARUtil::robot_pos.y - initial_robot_pos_.y, 2));
@@ -766,6 +855,19 @@ void MapHandler::ComputeTerrainRiskAttributes() {
         }
     }
 
+    // 消除墙壁周围的虚假陡坡 (Red Swallows Yellow)
+    // 1. 定义膨胀核：3x3 刚好对应你观察到的“一圈宽度一个点”
+    cv::Mat dilate_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+    // 2. 对红色(硬障碍)进行膨胀，生成“红墙+红晕”的掩膜
+    cv::Mat dilated_step_risk;
+    cv::dilate(step_risk, dilated_step_risk, dilate_kernel);
+    // 3. 从黄色(陡坡)中扣除这个掩膜
+    // 逻辑：如果一个点在红色膨胀区内，它就不能是黄色
+    // bitwise_not: 把 255 变成 0
+    cv::Mat not_red_zone;
+    cv::bitwise_not(dilated_step_risk, not_red_zone);
+    // bitwise_and: 只有在非红区，黄色才能保留
+    cv::bitwise_and(slope_risk, not_red_zone, slope_risk);
     cv::bitwise_or(slope_risk, step_risk, final_risk);
 
     // 5. [最关键一步] 过滤边界噪声
@@ -775,33 +877,119 @@ void MapHandler::ComputeTerrainRiskAttributes() {
     cv::erode(valid_mask, safe_zone, erode_kernel);          // 腐蚀有效区域
     cv::bitwise_and(final_risk, safe_zone, risk_mask_mat_);  // 赋值给成员变量
 
+    // [新增] 生成五类地形的独立 CV 图和点云
+    // ============================================================
+
+    // 1. 初始化五类 CV 图（全零）
+    obstacle_mask_ = cv::Mat::zeros(valid_mask.rows, valid_mask.cols, CV_8UC1);
+    // occlusion_boundary_mask_ 已经在前面生成了，不需要重新初始化
+    steep_slope_mask_ = cv::Mat::zeros(valid_mask.rows, valid_mask.cols, CV_8UC1);
+    moderate_slope_mask_ = cv::Mat::zeros(valid_mask.rows, valid_mask.cols, CV_8UC1);
+    flat_terrain_mask_ = cv::Mat::zeros(valid_mask.rows, valid_mask.cols, CV_8UC1);
+
+    // 2. 清空五类点云
+    obstacle_cloud_->clear();
+    occlusion_cloud_->clear();
+    steep_slope_cloud_->clear();
+    moderate_slope_cloud_->clear();
+    flat_terrain_cloud_rgb_->clear();
+
+    // 3. 遍历每个格子，按优先级分配到五类中
+    for (int r = 0; r < valid_mask.rows; r++) {
+        for (int c = 0; c < valid_mask.cols; c++) {
+            float slope_val = slope_mat.at<float>(r, c);
+            float step_val = inner_diff.at<float>(r, c);
+
+            // 先只填充 CV 图,不生成点云
+            if (step_risk.at<uchar>(r, c) > 100) {
+                obstacle_mask_.at<uchar>(r, c) = 255;
+                occlusion_boundary_mask_.at<uchar>(r, c) = 0;
+            } else if (slope_risk.at<uchar>(r, c) > 100) {
+                steep_slope_mask_.at<uchar>(r, c) = 255;
+            } else if (slope_val >= 0.176 && slope_val < 0.364 && step_val < 0.3) {
+                moderate_slope_mask_.at<uchar>(r, c) = 255;
+            } else if (valid_mask.at<uchar>(r, c) == 255) {
+                flat_terrain_mask_.at<uchar>(r, c) = 255;
+            }
+        }
+    }
+
+    // [新增] 对陡坡进行形态学处理,融合碎片
+    cv::Mat morph_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5));
+    cv::morphologyEx(steep_slope_mask_, steep_slope_mask_, cv::MORPH_CLOSE, morph_kernel);
+
+    // [新增] 对缓坡也做同样处理
+    cv::morphologyEx(moderate_slope_mask_, moderate_slope_mask_, cv::MORPH_CLOSE, morph_kernel);
+    obstacle_cloud_output_->clear();
+    // 4. 根据处理后的 CV 图生成点云
+    for (int r = 0; r < valid_mask.rows; r++) {
+        for (int c = 0; c < valid_mask.cols; c++) {
+            int ind = terrain_height_grid_->Sub2Ind(c, r, 0);
+            Eigen::Vector3d pos = terrain_height_grid_->Ind2Pos(ind);
+            PCLPoint pc;
+            pc.x = pos.x();
+            pc.y = pos.y();
+            pc.z = 0.0;
+
+            PointRGB p;
+            p.x = pos.x();
+            p.y = pos.y();
+            p.z = pos.z();
+
+            if (obstacle_mask_.at<uchar>(r, c) > 100) {
+                p.r = 255;
+                p.g = 0;
+                p.b = 0;
+                obstacle_cloud_->push_back(p);
+                obstacle_cloud_output_->push_back(pc);
+            } else if (occlusion_boundary_mask_.at<uchar>(r, c) > 100) {
+                bool is_map_edge = (r < 5 || r >= valid_mask.rows - 5 || c < 5 || c >= valid_mask.cols - 5);
+                if (is_map_edge) {
+                    p.r = 128;
+                    p.g = 128;
+                    p.b = 128;
+                } else {
+                    p.r = 0;
+                    p.g = 255;
+                    p.b = 0;
+                }
+                occlusion_cloud_->push_back(p);
+            } else if (steep_slope_mask_.at<uchar>(r, c) > 100) {
+                p.r = 255;
+                p.g = 255;
+                p.b = 0;
+                steep_slope_cloud_->push_back(p);
+            } else if (moderate_slope_mask_.at<uchar>(r, c) > 100) {
+                p.r = 0;
+                p.g = 0;
+                p.b = 255;
+                moderate_slope_cloud_->push_back(p);
+            } else if (flat_terrain_mask_.at<uchar>(r, c) > 100) {
+                p.r = 255;
+                p.g = 255;
+                p.b = 255;
+                flat_terrain_cloud_rgb_->push_back(p);
+            }
+        }
+    }
+
+    if (FARUtil::IsDebug) {
+        ROS_INFO_THROTTLE(2.0,
+            "MH: Terrain Classification - Obstacle: %lu, Occlusion: %lu, Steep: %lu, Moderate: %lu, Flat: %lu",
+            obstacle_cloud_->size(), occlusion_cloud_->size(), steep_slope_cloud_->size(),
+            moderate_slope_cloud_->size(), flat_terrain_cloud_rgb_->size());
+    }
+
     // **DEBUG**: 发布出去看看！
-    PublishRiskMapViz();
+    // PublishRiskMapViz();
+}
+
+void MapHandler::PublishRiskMapViz() {
     risk_cloud_->clear();
     risk_cloud_rgb_->clear();
     // 遍历 risk_mask_mat_，把白色的点转回世界坐标
     for (int r = 0; r < risk_mask_mat_.rows; r++) {
         for (int c = 0; c < risk_mask_mat_.cols; c++) {
-            if (risk_mask_mat_.at<uchar>(r, c) > 100) {  // 是障碍
-                // Image -> Grid Index
-                int ind = terrain_height_grid_->Sub2Ind(c, r, 0);  // x=c, y=r
-                Eigen::Vector3d pos = terrain_height_grid_->Ind2Pos(ind);
-
-                PCLPoint p;
-                p.x = pos.x();
-                p.y = pos.y();
-                p.z = pos.z();  // 这里可以用地形高度，或者为了明显设高一点
-                // 判断风险类型
-                if (step_risk.at<uchar>(r, c) > 100) {
-                    p.intensity = 200;  // 台阶/落差型风险
-                } else if (slope_risk.at<uchar>(r, c) > 100) {
-                    p.intensity = 100;  // 陡坡型风险 红色
-                } else {
-                    p.intensity = 50;  // 其他
-                }
-                risk_cloud_->push_back(p);
-            }
-
             int ind = terrain_height_grid_->Sub2Ind(c, r, 0);  // x=c, y=r
             Eigen::Vector3d pos = terrain_height_grid_->Ind2Pos(ind);
             float slope_val = slope_mat.at<float>(r, c);
@@ -811,11 +999,22 @@ void MapHandler::ComputeTerrainRiskAttributes() {
             p.x = pos.x();
             p.y = pos.y();
             p.z = pos.z();
-
             if (step_risk.at<uchar>(r, c) > 100) {
                 p.r = 255;
                 p.g = 0;
                 p.b = 0;  // 红色  高度差
+            } else if (occlusion_boundary_mask_.at<uchar>(r, c) > 100) {
+                // 检查是否在地图边缘
+                bool is_map_edge = (r < 5 || r >= valid_mask.rows - 5 || c < 5 || c >= valid_mask.cols - 5);
+                if (is_map_edge) {
+                    p.r = 0;
+                    p.g = 0;
+                    p.b = 0;  // 灰色：地图边界
+                } else {
+                    p.r = 0;
+                    p.g = 255;
+                    p.b = 0;  // 绿色：真实遮挡
+                }
             } else if (slope_risk.at<uchar>(r, c) > 100) {
                 p.r = 255;
                 p.g = 255;
@@ -830,31 +1029,16 @@ void MapHandler::ComputeTerrainRiskAttributes() {
                 p.b = 255;  // 白色  几乎视为平地
             }
             risk_cloud_rgb_->push_back(p);
-
-            // // 新增：显示坡度在10-20度且落差小于0.3的格子
-            // float slope_val = slope_mat.at<float>(r, c);
-            // float step_val = inner_diff.at<float>(r, c);
-            // if (step_val < 0.3 && slope_val >= 0.176 && slope_val < 0.364) {
-            //     int ind = terrain_height_grid_->Sub2Ind(c, r, 0);
-            //     Eigen::Vector3d pos = terrain_height_grid_->Ind2Pos(ind);
-
-            //     PCLPoint p;
-            //     p.x = pos.x();
-            //     p.y = pos.y();
-            //     p.z = pos.z();
-            //     p.intensity = 80;  // 你可以选一个独特的值，比如80，代表10-20度坡度
-
-            //     risk_cloud_->push_back(p);
-            // }
         }
     }
 }
-
-void MapHandler::PublishRiskMapViz() {}
 
 PointCloudPtr MapHandler::GetRiskCloud() {
     return risk_cloud_;
 }
 PointCloudRGB MapHandler::GetRiskRBGCloud() {
     return risk_cloud_rgb_;
+}
+PointCloudPtr MapHandler::GetAveHeightCloud() {
+    return ave_high_terrain_cloud_;
 }

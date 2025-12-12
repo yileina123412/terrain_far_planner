@@ -12,7 +12,7 @@ void FARMaster::Init() {
     /* initialize subscriber and publisher */
     reset_graph_sub_ = nh.subscribe("/reset_visibility_graph", 5, &FARMaster::ResetGraphCallBack, this);
     odom_sub_ = nh.subscribe("/odom_world", 5, &FARMaster::OdomCallBack, this);
-    terrain_sub_ = nh.subscribe("/terrain_cloud", 1, &FARMaster::TerrainCallBack, this);
+    terrain_sub_ = nh.subscribe("/local_map_large", 1, &FARMaster::TerrainCallBack, this);
     scan_sub_ = nh.subscribe("/scan_cloud", 5, &FARMaster::ScanCallBack, this);
     waypoint_sub_ = nh.subscribe("/goal_point", 1, &FARMaster::WaypointCallBack, this);
     terrain_local_sub_ = nh.subscribe("/terrain_local_cloud", 1, &FARMaster::TerrainLocalCallBack, this);
@@ -39,6 +39,13 @@ void FARMaster::Init() {
 
     risk_debug_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/risk_debug_cloud", 1);
     rgb_risk_debug_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/rgb_risk_debug_cloud", 1);
+
+    // [新增] 发布五类地形点云
+    obstacle_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/terrain/obstacle", 1);
+    occlusion_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/terrain/occlusion", 1);
+    steep_slope_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/terrain/steep_slope", 1);
+    moderate_slope_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/terrain/moderate_slope", 1);
+    flat_terrain_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/terrain/flat", 1);
 
     this->LoadROSParams();
 
@@ -101,12 +108,12 @@ void FARMaster::Init() {
     robot_pos_ = Point3D(0, 0, 0);
     nav_heading_ = Point3D(0, 0, 0);
     goal_waypoint_stamped_.header.frame_id = master_params_.world_frame;
-    printf("\033[2J"), printf("\033[0;0H");  // cleanup screen
+
     std::cout << std::endl;
     if (master_params_.is_static_env) {
-        std::cout << "\033[1;33m **************** STATIC ENV PLANNING **************** \033[0m\n" << std::endl;
+        std::cout << " **************** STATIC ENV PLANNING ****************\n" << std::endl;
     } else {
-        std::cout << "\033[1;33m **************** DYNAMIC ENV PLANNING **************** \033[0m\n" << std::endl;
+        std::cout << " **************** DYNAMIC ENV PLANNING **************** \n" << std::endl;
     }
     std::cout << "\n" << std::endl;
 }
@@ -114,8 +121,8 @@ void FARMaster::Init() {
 void FARMaster::ResetEnvironmentAndGraph() {
     this->ResetInternalValues();
     if (!FARUtil::IsDebug) {  // Terminal Output
-        printf("\033[A"), printf("\033[A"), printf("\033[2K");
-        std::cout << "\033[1;31m V-Graph Resetting...\033[0m\n" << std::endl;
+        // printf("\033[A"), printf("\033[A"), printf("\033[2K");
+        // std::cout << "\033[1;31m V-Graph Resetting...\033[0m\n" << std::endl;
     }
     graph_manager_.ResetCurrentGraph();
     map_handler_.ResetGripMapCloud();
@@ -137,6 +144,7 @@ void FARMaster::ResetEnvironmentAndGraph() {
 }
 
 void FARMaster::Loop() {
+    ROS_INFO("start LOOP");
     ros::Rate loop_rate(master_params_.main_run_freq);
     while (ros::ok()) {
         if (is_reset_env_) {
@@ -149,6 +157,8 @@ void FARMaster::Loop() {
         /* Process callback functions */
         ros::spinOnce();
         if (!this->PreconditionCheck()) {
+            ROS_WARN_THROTTLE(
+                5.0, "Waiting for preconditions: is_cloud_init_=%d, is_odom_init_=%d", is_cloud_init_, is_odom_init_);
             loop_rate.sleep();
             continue;
         }
@@ -162,8 +172,12 @@ void FARMaster::Loop() {
         }
         /* Extract Vertices and new nodes */
         FARUtil::Timer.start_time("Total V-Graph Update");
-        contour_detector_.BuildTerrainImgAndExtractContour(
-            odom_node_ptr_, FARUtil::surround_obs_cloud_, realworld_contour_);
+        ROS_INFO("start ExtractContoursFromMask");
+
+        cv::Mat obstacle_mask = map_handler_.GetObstacleMask();
+        PointCloudPtr obstacle_cloud = map_handler_.GetObsOutCloud();
+        contour_detector_.BuildTerrainImgAndExtractContour(odom_node_ptr_, obstacle_cloud, realworld_contour_);
+        // contour_detector_.ExtractContoursFromMask(obstacle_mask, odom_node_ptr_, realworld_contour_);
         contour_graph_.UpdateContourGraph(odom_node_ptr_, realworld_contour_);
         if (is_graph_init_) {
             if (!FARUtil::IsDebug) printf("\033[2K");
@@ -231,16 +245,16 @@ void FARMaster::Loop() {
             if (FARUtil::IsDebug) {
                 std::cout << " ========================================================== " << std::endl;
             } else {  // cleanup outputs in terminal
-                for (int i = 0; i < 6; i++) {
-                    printf("\033[A");
-                }
+                // for (int i = 0; i < 6; i++) {
+                //     printf("\033[A");
+                // }
             }
         }
 
         if (!is_graph_init_ && !nav_graph_.empty()) {
             is_graph_init_ = true;
-            printf("\033[A"), printf("\033[A"), printf("\033[2K");
-            std::cout << "\033[1;32m V-Graph Initialized \033[0m\n" << std::endl;
+            // printf("\033[A"), printf("\033[A"), printf("\033[2K");
+            // std::cout << "\033[1;32m V-Graph Initialized \033[0m\n" << std::endl;
         }
         loop_rate.sleep();
     }
@@ -248,108 +262,90 @@ void FARMaster::Loop() {
 
 void FARMaster::PlanningCallBack(const ros::TimerEvent& event) {
     if (!is_graph_init_) return;
-    const NavNodePtr goal_ptr = graph_planner_.GetGoalNodePtr();
-    if (goal_ptr == NULL) {
-        /* Graph Traversablity Update */
-        if (!FARUtil::IsDebug) printf("\033[2K");
-        // std::cout<<"    "<<"Adding Goal to V-Graph "<<"Time: "<<0.f<<"ms"<<std::endl;
-        graph_planner_.UpdateGraphTraverability(odom_node_ptr_, NULL);
-        if (!FARUtil::IsDebug) printf("\033[2K");
-        std::cout << "    "
-                  << "Path Search "
-                  << "Time: " << 0.f << "ms" << std::endl;
-    } else {
-        // Update goal postion with nearby terrain cloud
-        const Point3D ori_p = graph_planner_.GetOriginNodePos(true);
-        PointCloudPtr goal_obs(new pcl::PointCloud<PCLPoint>());
-        PointCloudPtr goal_free(new pcl::PointCloud<PCLPoint>());
-        map_handler_.GetCloudOfPoint(ori_p, goal_obs, CloudType::OBS_CLOUD, true);
-        map_handler_.GetCloudOfPoint(ori_p, goal_free, CloudType::FREE_CLOUD, true);
-        graph_planner_.UpdateFreeTerrainGrid(ori_p, goal_obs, goal_free);
-        graph_planner_.ReEvaluateGoalPosition(goal_ptr, !master_params_.is_multi_layer);
+    // const NavNodePtr goal_ptr = graph_planner_.GetGoalNodePtr();
+    // if (goal_ptr == NULL) {
+    //     /* Graph Traversablity Update */
+    //     if (!FARUtil::IsDebug) printf("\033[2K");
+    //     // std::cout<<"    "<<"Adding Goal to V-Graph "<<"Time: "<<0.f<<"ms"<<std::endl;
+    //     graph_planner_.UpdateGraphTraverability(odom_node_ptr_, NULL);
+    //     if (!FARUtil::IsDebug) printf("\033[2K");
+    //     std::cout << "    "
+    //               << "Path Search "
+    //               << "Time: " << 0.f << "ms" << std::endl;
+    // } else {
+    //     // Update goal postion with nearby terrain cloud
+    //     const Point3D ori_p = graph_planner_.GetOriginNodePos(true);
+    //     PointCloudPtr goal_obs(new pcl::PointCloud<PCLPoint>());
+    //     PointCloudPtr goal_free(new pcl::PointCloud<PCLPoint>());
+    //     map_handler_.GetCloudOfPoint(ori_p, goal_obs, CloudType::OBS_CLOUD, true);
+    //     map_handler_.GetCloudOfPoint(ori_p, goal_free, CloudType::FREE_CLOUD, true);
+    //     graph_planner_.UpdateFreeTerrainGrid(ori_p, goal_obs, goal_free);
+    //     graph_planner_.ReEvaluateGoalPosition(goal_ptr, !master_params_.is_multi_layer);
 
-        // Adding goal into v-graph
-        FARUtil::Timer.start_time("Adding Goal to V-Graph");
-        graph_planner_.UpdateGoalNavNodeConnects(goal_ptr);
-        graph_planner_.UpdaetVGraph(graph_manager_.GetNavGraph());
-        if (!FARUtil::IsDebug) printf("\033[2K");
-        FARUtil::Timer.end_time("Adding Goal to V-Graph");
+    //     // Adding goal into v-graph
+    //     FARUtil::Timer.start_time("Adding Goal to V-Graph");
+    //     graph_planner_.UpdateGoalNavNodeConnects(goal_ptr);
+    //     graph_planner_.UpdaetVGraph(graph_manager_.GetNavGraph());
+    //     if (!FARUtil::IsDebug) printf("\033[2K");
+    //     FARUtil::Timer.end_time("Adding Goal to V-Graph");
 
-        // Update v-graph traversibility
-        FARUtil::Timer.start_time("Path Search");
-        graph_planner_.UpdateGraphTraverability(odom_node_ptr_, goal_ptr);
+    //     // Update v-graph traversibility
+    //     FARUtil::Timer.start_time("Path Search");
+    //     graph_planner_.UpdateGraphTraverability(odom_node_ptr_, goal_ptr);
 
-        // Construct path to gaol and publish waypoint
-        NodePtrStack global_path;
-        Point3D current_free_goal;
-        NavNodePtr last_nav_ptr = nav_node_ptr_;
-        bool is_planning_fails = false;
-        goal_waypoint_stamped_.header.stamp = ros::Time::now();
-        bool is_current_free_nav = false;
-        bool is_reach_goal = false;
-        if (graph_planner_.PathToGoal(goal_ptr, global_path, nav_node_ptr_, current_free_goal, is_planning_fails,
-                is_reach_goal, is_current_free_nav) &&
-            nav_node_ptr_ != NULL) {
-            Point3D waypoint = nav_node_ptr_->position;
-            if (nav_node_ptr_ != goal_ptr) {
-                waypoint = this->ProjectNavWaypoint(nav_node_ptr_, last_nav_ptr);
-            } else if (master_params_.is_viewpoint_extend) {
-                planner_viz_.VizViewpointExtend(goal_ptr, goal_ptr->position);
-            }
-            goal_waypoint_stamped_.point = FARUtil::Point3DToGeoMsgPoint(waypoint);
-            goal_pub_.publish(goal_waypoint_stamped_);
-            is_planner_running_ = true;
-            planner_viz_.VizPoint3D(waypoint, "waypoint", VizColor::MAGNA, 1.5);
-            planner_viz_.VizPoint3D(current_free_goal, "free_goal", VizColor::GREEN, 1.5);
-            planner_viz_.VizPath(global_path, is_current_free_nav);
-        } else if (is_planner_running_) {
-            // stop robot
-            global_path.clear();
-            planner_viz_.VizPath(global_path);
-            is_planner_running_ = false;
-            nav_heading_ = Point3D(0, 0, 0);
-            if (is_planning_fails) {  // stops the robot
-                goal_waypoint_stamped_.point = FARUtil::Point3DToGeoMsgPoint(robot_pos_);
-                goal_pub_.publish(goal_waypoint_stamped_);
-            }
-        }
-        if (!FARUtil::IsDebug) printf("\033[2K");
+    //     // Construct path to gaol and publish waypoint
+    //     NodePtrStack global_path;
+    //     Point3D current_free_goal;
+    //     NavNodePtr last_nav_ptr = nav_node_ptr_;
+    //     bool is_planning_fails = false;
+    //     goal_waypoint_stamped_.header.stamp = ros::Time::now();
+    //     bool is_current_free_nav = false;
+    //     bool is_reach_goal = false;
+    //     if (graph_planner_.PathToGoal(goal_ptr, global_path, nav_node_ptr_, current_free_goal, is_planning_fails,
+    //             is_reach_goal, is_current_free_nav) &&
+    //         nav_node_ptr_ != NULL) {
+    //         Point3D waypoint = nav_node_ptr_->position;
+    //         if (nav_node_ptr_ != goal_ptr) {
+    //             waypoint = this->ProjectNavWaypoint(nav_node_ptr_, last_nav_ptr);
+    //         } else if (master_params_.is_viewpoint_extend) {
+    //             planner_viz_.VizViewpointExtend(goal_ptr, goal_ptr->position);
+    //         }
+    //         goal_waypoint_stamped_.point = FARUtil::Point3DToGeoMsgPoint(waypoint);
+    //         goal_pub_.publish(goal_waypoint_stamped_);
+    //         is_planner_running_ = true;
+    //         planner_viz_.VizPoint3D(waypoint, "waypoint", VizColor::MAGNA, 1.5);
+    //         planner_viz_.VizPoint3D(current_free_goal, "free_goal", VizColor::GREEN, 1.5);
+    //         planner_viz_.VizPath(global_path, is_current_free_nav);
+    //     } else if (is_planner_running_) {
+    //         // stop robot
+    //         global_path.clear();
+    //         planner_viz_.VizPath(global_path);
+    //         is_planner_running_ = false;
+    //         nav_heading_ = Point3D(0, 0, 0);
+    //         if (is_planning_fails) {  // stops the robot
+    //             goal_waypoint_stamped_.point = FARUtil::Point3DToGeoMsgPoint(robot_pos_);
+    //             goal_pub_.publish(goal_waypoint_stamped_);
+    //         }
+    //     }
+    //     if (!FARUtil::IsDebug) printf("\033[2K");
 
-        // publish planner status and timers
-        std_msgs::Bool reach_goal_msg;
-        reach_goal_msg.data = is_reach_goal;
-        reach_goal_pub_.publish(reach_goal_msg);
-        std_msgs::Float32 traverse_timer;
-        traverse_timer.data = FARUtil::Timer.record_time("Overall_executing");
-        traverse_time_pub_.publish(traverse_timer);
-        if (is_reach_goal) {
-            FARUtil::Timer.end_time("Overall_executing", false);
-        }
-        plan_timer_.data = FARUtil::Timer.end_time("Path Search");
-        planning_time_pub_.publish(plan_timer_);
-    }
+    //     // publish planner status and timers
+    //     std_msgs::Bool reach_goal_msg;
+    //     reach_goal_msg.data = is_reach_goal;
+    //     reach_goal_pub_.publish(reach_goal_msg);
+    //     std_msgs::Float32 traverse_timer;
+    //     traverse_timer.data = FARUtil::Timer.record_time("Overall_executing");
+    //     traverse_time_pub_.publish(traverse_timer);
+    //     if (is_reach_goal) {
+    //         FARUtil::Timer.end_time("Overall_executing", false);
+    //     }
+    //     plan_timer_.data = FARUtil::Timer.end_time("Path Search");
+    //     planning_time_pub_.publish(plan_timer_);
+    // }
 }
 
 void FARMaster::LocalBoundaryHandler(const std::vector<PointPair>& local_boundary) {
     if (!master_params_.is_pub_boundary || local_boundary.empty()) return;
-    geometry_msgs::PolygonStamped boundary_poly;
-    boundary_poly.header.frame_id = master_params_.world_frame;
-    boundary_poly.header.stamp = ros::Time::now();
-    float index_z = robot_pos_.z;
-    std::vector<PointPair> sorted_boundary;
-    for (const auto& edge : local_boundary) {
-        if (FARUtil::DistanceToLineSeg2D(robot_pos_, edge) > master_params_.local_planner_range) continue;
-        sorted_boundary.push_back(edge);
-    }
-    FARUtil::SortEdgesClockWise(robot_pos_, sorted_boundary); /* For better rviz visualization purpose only! */
-    for (const auto& edge : sorted_boundary) {
-        geometry_msgs::Point32 geo_p1, geo_p2;
-        geo_p1.x = edge.first.x, geo_p1.y = edge.first.y, geo_p1.z = index_z;
-        geo_p2.x = edge.second.x, geo_p2.y = edge.second.y, geo_p2.z = index_z;
-        boundary_poly.polygon.points.push_back(geo_p1), boundary_poly.polygon.points.push_back(geo_p2);
-        index_z += 0.001f;  // seperate polygon lines
-    }
-    boundary_pub_.publish(boundary_poly);
 }
 
 Point3D FARMaster::ProjectNavWaypoint(const NavNodePtr& nav_node_ptr, const NavNodePtr& last_point_ptr) {
@@ -623,10 +619,11 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     if (!is_odom_init_) return;
     // update map grid robot center
     map_handler_.UpdateRobotPosition(FARUtil::robot_pos);
+    // ROS_INFO("START TERRAIN");
     if (!is_stop_update_) {
         this->PrcocessCloud(pc, temp_cloud_ptr_);
         FARUtil::CropBoxCloud(temp_cloud_ptr_, robot_pos_,
-            Point3D(master_params_.terrain_range, master_params_.terrain_range, FARUtil::kTolerZ));
+            Point3D(master_params_.terrain_range, master_params_.terrain_range, master_params_.terrain_range));
         FARUtil::ExtractFreeAndObsCloud(temp_cloud_ptr_, temp_free_ptr_, temp_obs_ptr_);
         if (!master_params_.is_static_env) {
             FARUtil::RemoveOverlapCloud(temp_obs_ptr_, FARUtil::stack_dyobs_cloud_, true);
@@ -641,7 +638,8 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     }
     // extract surround free cloud & update terrain height
     map_handler_.GetSurroundFreeCloud(FARUtil::surround_free_cloud_);
-    map_handler_.UpdateTerrainHeightGrid(FARUtil::surround_free_cloud_, terrain_height_ptr_);
+    // map_handler_.UpdateTerrainHeightGrid(FARUtil::surround_free_cloud_, terrain_height_ptr_);
+    map_handler_.UpdateTerrainHeightGrid(temp_cloud_ptr_, terrain_height_ptr_);
 
     temp_risk_cloud_ = map_handler_.GetRiskCloud();
     temp_risk_rgb_cloud_ = map_handler_.GetRiskRBGCloud();
@@ -671,13 +669,13 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     FARUtil::StackCloudByTime(FARUtil::cur_new_cloud_, FARUtil::stack_new_cloud_, FARUtil::kNewDecayTime);
     FARUtil::UpdateKdTrees(FARUtil::stack_new_cloud_);
 
-    if (!FARUtil::surround_obs_cloud_->empty()) is_cloud_init_ = true;
+    if (!FARUtil::surround_free_cloud_->empty()) is_cloud_init_ = true;
 
     /* visualize clouds */
-    planner_viz_.VizPointCloud(new_PCL_pub_, FARUtil::stack_new_cloud_);
-    planner_viz_.VizPointCloud(dynamic_obs_pub_, FARUtil::cur_dyobs_cloud_);
-    planner_viz_.VizPointCloud(surround_free_debug_, FARUtil::surround_free_cloud_);
-    planner_viz_.VizPointCloud(surround_obs_debug_, FARUtil::surround_obs_cloud_);
+    // planner_viz_.VizPointCloud(new_PCL_pub_, FARUtil::stack_new_cloud_);
+    // planner_viz_.VizPointCloud(dynamic_obs_pub_, FARUtil::cur_dyobs_cloud_);
+    // planner_viz_.VizPointCloud(surround_free_debug_, FARUtil::surround_free_cloud_);
+    // planner_viz_.VizPointCloud(surround_obs_debug_, FARUtil::surround_obs_cloud_);
     planner_viz_.VizPointCloud(terrain_height_pub_, map_handler_.ave_high_terrain_cloud_);
     planner_viz_.VizPointCloud(risk_debug_pub_, temp_risk_cloud_);
     planner_viz_.VizRGBPointCloud(rgb_risk_debug_pub_, temp_risk_rgb_cloud_);
@@ -686,6 +684,12 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     map_handler_.GetNeighborCeilsCenters(neighbor_centers);
     map_handler_.GetOccupancyCeilsCenters(occupancy_centers);
     planner_viz_.VizMapGrids(neighbor_centers, occupancy_centers, map_params_.cell_length, map_params_.cell_height);
+    // 五个地形图
+    planner_viz_.VizRGBPointCloud(obstacle_pub_, map_handler_.obstacle_cloud_);
+    planner_viz_.VizRGBPointCloud(occlusion_pub_, map_handler_.occlusion_cloud_);
+    planner_viz_.VizRGBPointCloud(steep_slope_pub_, map_handler_.steep_slope_cloud_);
+    planner_viz_.VizRGBPointCloud(moderate_slope_pub_, map_handler_.moderate_slope_cloud_);
+    planner_viz_.VizRGBPointCloud(flat_terrain_pub_, map_handler_.flat_terrain_cloud_rgb_);
     // DBBUG visual raycast grids
     if (!master_params_.is_static_env) {
         scan_handler_.GridVisualCloud(scan_grid_ptr_, GridStatus::RAY);
