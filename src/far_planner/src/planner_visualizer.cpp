@@ -19,6 +19,8 @@ void DPVisualizer::Init(const ros::NodeHandle& nh) {
     viz_contour_pub_ = nh_.advertise<MarkerArray>("/viz_contour_topic", 5);
     viz_map_pub_ = nh_.advertise<MarkerArray>("/viz_grid_map_topic", 5);
     viz_view_extend = nh_.advertise<MarkerArray>("/viz_viewpoint_extend_topic", 5);
+
+    viz_steep_clusters_pub_ = nh_.advertise<MarkerArray>("/viz_steep_clusters_topic", 5);
 }
 
 void DPVisualizer::VizNodes(const NodePtrStack& node_stack, const std::string& ns, const VizColor& color,
@@ -467,4 +469,63 @@ void DPVisualizer::VizRGBPointCloud(const ros::Publisher& viz_pub, const pcl::Po
     msg_pc.header.frame_id = FARUtil::worldFrameId;
     msg_pc.header.stamp = ros::Time::now();
     viz_pub.publish(msg_pc);
+}
+
+void DPVisualizer::VizSteepSlopeClusters(
+    const std::vector<PointStack>& boundary_clusters, const std::vector<PointStack>& inner_clusters) {
+    if (boundary_clusters.empty() || inner_clusters.empty()) {
+        ROS_WARN("Viz: No steep slope clusters to visualize");
+        return;
+    }
+
+    MarkerArray cluster_marker_array;
+
+    // 定义颜色循环（最多支持10种颜色）
+    std::vector<VizColor> colors = {VizColor::RED, VizColor::BLUE, VizColor::GREEN, VizColor::YELLOW, VizColor::MAGNA,
+        VizColor::ORANGE, VizColor::EMERALD, VizColor::PURPLE, VizColor::WHITE};
+
+    // 遍历每个聚类
+    for (size_t i = 0; i < boundary_clusters.size(); i++) {
+        // 选择颜色（循环使用）
+        VizColor boundary_color = colors[i % colors.size()];
+        VizColor inner_color = colors[(i + 1) % colors.size()];  // 内部点用下一个颜色
+
+        // 边界点 Marker
+        Marker boundary_marker;
+        boundary_marker.type = Marker::SPHERE_LIST;
+        std::string boundary_ns = "steep_boundary_" + std::to_string(i);
+        this->SetMarker(boundary_color, boundary_ns, 0.3f, 0.8f, boundary_marker);
+
+        for (const auto& p : boundary_clusters[i]) {
+            geometry_msgs::Point geo_p = FARUtil::Point3DToGeoMsgPoint(p);
+            boundary_marker.points.push_back(geo_p);
+        }
+
+        // 内部点 Marker
+        Marker inner_marker;
+        inner_marker.type = Marker::CUBE_LIST;
+        std::string inner_ns = "steep_inner_" + std::to_string(i);
+        this->SetMarker(inner_color, inner_ns, 0.5f, 0.6f, inner_marker);
+
+        for (const auto& p : inner_clusters[i]) {
+            geometry_msgs::Point geo_p = FARUtil::Point3DToGeoMsgPoint(p);
+            inner_marker.points.push_back(geo_p);
+        }
+
+        // 添加到 MarkerArray
+        if (!boundary_marker.points.empty()) {
+            cluster_marker_array.markers.push_back(boundary_marker);
+        }
+        if (!inner_marker.points.empty()) {
+            cluster_marker_array.markers.push_back(inner_marker);
+        }
+
+        ROS_INFO("Viz: Cluster %lu - boundary: %lu points (spheres), inner: %lu points (cubes)", i,
+            boundary_clusters[i].size(), inner_clusters[i].size());
+    }
+
+    // 发布可视化
+    viz_steep_clusters_pub_.publish(cluster_marker_array);
+
+    ROS_INFO("Viz: Published %lu steep slope clusters", boundary_clusters.size());
 }

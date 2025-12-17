@@ -1,6 +1,11 @@
 #ifndef CONTOUR_DETECTOR_H
 #define CONTOUR_DETECTOR_H
 
+#include <pcl/segmentation/extract_clusters.h>
+#include <pcl/surface/concave_hull.h>
+#include <pcl/surface/convex_hull.h>
+
+#include "map_handler.h"
 #include "utility.h"
 
 struct ContourDetectParams {
@@ -12,6 +17,16 @@ struct ContourDetectParams {
     int kBlurSize;
     bool is_save_img;
     std::string img_path;
+
+    // [新增] 陡坡处理参数
+    float steep_crop_radius;           // 陡坡点云裁剪半径(米)
+    float steep_cluster_tolerance;     // 聚类容差(米)
+    int steep_min_cluster_size;        // 最小聚类点数
+    int steep_max_cluster_size;        // 最大聚类点数
+    float steep_boundary_sample_dist;  // 边界采样间距(米)
+    float steep_inner_voxel_size;      // 内部体素滤波大小(米)
+    float steep_concave_alpha;         // [新增] 凹包alpha值
+    int steep_smooth_window;           // [新增] 边界平滑窗口大小
 };
 
 class ContourDetector {
@@ -193,6 +208,10 @@ private:
         }
     }
 
+    // [新增] 陡坡处理辅助函数
+    void ExtractBoundaryPoints(const PointCloudPtr& cluster, PointStack& boundary_points);
+    void ExtractInnerPoints(PointCloudPtr& cluster, PointStack& inner_points);
+
 public:
     ContourDetector() = default;
     ~ContourDetector() = default;
@@ -216,7 +235,15 @@ public:
      */
     void ExtractContoursFromMask(
         const cv::Mat& mask_img, const NavNodePtr& odom_node_ptr, std::vector<PointStack>& realworld_contour);
-
+    /**
+     * [新增] 从陡坡点云中提取边界点和内部点（按聚类分组）
+     * @param steep_cloud 陡坡点云
+     * @param odom_node_ptr 当前机器人位置节点
+     * @param boundary_clusters [返回] 每个聚类的边界点集合
+     * @param inner_clusters [返回] 每个聚类的内部点集合
+     */
+    void ExtractSteepSlopePoints(const PointCloudPtr& steep_cloud, const NavNodePtr& odom_node_ptr,
+        std::vector<PointStack>& boundary_clusters, std::vector<PointStack>& inner_clusters);
     /**
      * Show Corners on Pointcloud projection image
      * @param img_mat pointcloud projection image

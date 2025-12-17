@@ -34,6 +34,7 @@ private:
     ros::Publisher viz_node_pub_, viz_path_pub_, viz_poly_pub_, viz_graph_pub_;
     ros::Publisher viz_contour_pub_, viz_map_pub_, viz_view_extend;
     ros::Publisher risk_debug_pub_;
+    ros::Publisher viz_steep_clusters_pub_;
 
 public:
     DPVisualizer() = default;
@@ -62,6 +63,9 @@ public:
     void VizGraph(const NodePtrStack& graph);
     void VizPointCloud(const ros::Publisher& viz_pub, const PointCloudPtr& pc);
     void VizRGBPointCloud(const ros::Publisher& viz_pub, const pcl::PointCloud<pcl::PointXYZRGB>::Ptr& pc);
+    // [新增] 可视化陡坡聚类结果（边界点和内部点）
+    void VizSteepSlopeClusters(
+        const std::vector<PointStack>& boundary_clusters, const std::vector<PointStack>& inner_clusters);
 
     static void SetMarker(const VizColor& color, const std::string& ns, const float& scale, const float& alpha,
         Marker& scan_marker, const float& scale_ratio = FARUtil::kVizRatio);

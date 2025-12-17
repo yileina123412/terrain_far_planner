@@ -46,6 +46,7 @@ void FARMaster::Init() {
     steep_slope_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/terrain/steep_slope", 1);
     moderate_slope_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/terrain/moderate_slope", 1);
     flat_terrain_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/terrain/flat", 1);
+    slop_cloud_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/terrain/slop_data", 1);
 
     this->LoadROSParams();
 
@@ -174,10 +175,21 @@ void FARMaster::Loop() {
         FARUtil::Timer.start_time("Total V-Graph Update");
         ROS_INFO("start ExtractContoursFromMask");
 
-        cv::Mat obstacle_mask = map_handler_.GetObstacleMask();
+        // cv::Mat obstacle_mask = map_handler_.GetObstacleMask();
         PointCloudPtr obstacle_cloud = map_handler_.GetObsOutCloud();
+        // PointCloudPtr slop_cloud = map_handler_.GetSteepOutCloud();
+        // // 新建一个合并后的点云
+        // PointCloudPtr merged_cloud(new pcl::PointCloud<PCLPoint>());
+        // // 先添加障碍物点云
+        // *merged_cloud += *obstacle_cloud;
+        // // 再添加坡度点云
+        // *merged_cloud += *slop_cloud;
         contour_detector_.BuildTerrainImgAndExtractContour(odom_node_ptr_, obstacle_cloud, realworld_contour_);
-        // contour_detector_.ExtractContoursFromMask(obstacle_mask, odom_node_ptr_, realworld_contour_);
+        steep_cloud_ = map_handler_.GetSteepOutCloud();
+        // 提取陡坡的边界
+        contour_detector_.ExtractSteepSlopePoints(
+            steep_cloud_, odom_node_ptr_, steep_boundary_clusters_, steep_inner_clusters_);
+
         contour_graph_.UpdateContourGraph(odom_node_ptr_, realworld_contour_);
         if (is_graph_init_) {
             if (!FARUtil::IsDebug) printf("\033[2K");
@@ -237,9 +249,10 @@ void FARMaster::Loop() {
         planner_viz_.VizNodes(nav_graph_, "clear_nodes", VizColor::ORANGE);
         // planner_viz_.VizNodes(graph_manager_.GetOutContourNodes(), "out_contour", VizColor::YELLOW);
         planner_viz_.VizPoint3D(FARUtil::free_odom_p, "free_odom_position", VizColor::ORANGE, 1.0);
-        planner_viz_.VizGraph(nav_graph_);
+        // planner_viz_.VizGraph(nav_graph_);
         planner_viz_.VizContourGraph(ContourGraph::contour_graph_);
-        planner_viz_.VizGlobalPolygons(ContourGraph::global_contour_, ContourGraph::unmatched_contour_);
+        // planner_viz_.VizGlobalPolygons(ContourGraph::global_contour_, ContourGraph::unmatched_contour_);
+        planner_viz_.VizSteepSlopeClusters(steep_boundary_clusters_, steep_inner_clusters_);
 
         if (is_graph_init_) {
             if (FARUtil::IsDebug) {
@@ -545,6 +558,15 @@ void FARMaster::LoadROSParams() {
     cdetect_params_.kBlurSize = (int)std::round(FARUtil::kNavClearDist / master_params_.voxel_dim);
     cdetect_params_.sensor_range = master_params_.sensor_range;
     cdetect_params_.voxel_dim = master_params_.voxel_dim;
+    // [新增] 陡坡处理参数
+    nh.param<float>(cdetect_prefix + "steep_crop_radius", cdetect_params_.steep_crop_radius, 10.0f);
+    nh.param<float>(cdetect_prefix + "steep_cluster_tolerance", cdetect_params_.steep_cluster_tolerance, 0.5f);
+    nh.param<int>(cdetect_prefix + "steep_min_cluster_size", cdetect_params_.steep_min_cluster_size, 10);
+    nh.param<int>(cdetect_prefix + "steep_max_cluster_size", cdetect_params_.steep_max_cluster_size, 10000);
+    nh.param<float>(cdetect_prefix + "steep_boundary_sample_dist", cdetect_params_.steep_boundary_sample_dist, 0.3f);
+    nh.param<float>(cdetect_prefix + "steep_inner_voxel_size", cdetect_params_.steep_inner_voxel_size, 1.0f);
+    nh.param<float>(cdetect_prefix + "steep_concave_alpha", cdetect_params_.steep_concave_alpha, 1.0f);  // [新增]
+    nh.param<int>(cdetect_prefix + "steep_smooth_window", cdetect_params_.steep_smooth_window, 3);       // [新增]
 }
 
 void FARMaster::OdomCallBack(const nav_msgs::OdometryConstPtr& msg) {
@@ -690,6 +712,9 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     planner_viz_.VizRGBPointCloud(steep_slope_pub_, map_handler_.steep_slope_cloud_);
     planner_viz_.VizRGBPointCloud(moderate_slope_pub_, map_handler_.moderate_slope_cloud_);
     planner_viz_.VizRGBPointCloud(flat_terrain_pub_, map_handler_.flat_terrain_cloud_rgb_);
+
+    planner_viz_.VizPointCloud(slop_cloud_pub_, map_handler_.slope_cloud_);
+
     // DBBUG visual raycast grids
     if (!master_params_.is_static_env) {
         scan_handler_.GridVisualCloud(scan_grid_ptr_, GridStatus::RAY);

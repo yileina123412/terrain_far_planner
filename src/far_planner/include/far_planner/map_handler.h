@@ -36,6 +36,8 @@ public:
     PointCloudRGB steep_slope_cloud_;
     PointCloudRGB moderate_slope_cloud_;
     PointCloudRGB flat_terrain_cloud_rgb_;
+
+    PointCloudPtr slope_cloud_;  // 坡度可视化点云
     MapHandler() = default;
     ~MapHandler() = default;
 
@@ -188,6 +190,44 @@ public:
         return obstacle_cloud_output_;
     }
 
+    PointCloudPtr GetSteepOutCloud() const {
+        return steep_slope_cloud_output_;
+    }
+
+    PointCloudPtr GetModerateOutCloud() const {
+        return moderate_slope_cloud_output_;
+    }
+
+    PointCloudPtr GetSlopeCloud() const {
+        return slope_cloud_;
+    }
+
+    // 根据世界坐标查询梯度向量
+    bool GetGradientAtPosition(const Point3D& world_pos, float& gx, float& gy, float& slope) const {
+        if (!terrain_height_grid_) return false;
+
+        // 世界坐标 → 网格索引
+        Eigen::Vector3i sub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(world_pos.x, world_pos.y, 0.0f));
+        int r = sub.y();
+        int c = sub.x();
+
+        // 检查边界
+        if (r < 0 || r >= grad_x.rows || c < 0 || c >= grad_x.cols) {
+            return false;
+        }
+
+        // 检查该点是否有效
+        if (valid_mask.at<uchar>(r, c) == 0) {
+            return false;
+        }
+
+        // 返回梯度
+        gx = grad_x.at<float>(r, c);
+        gy = grad_y.at<float>(r, c);
+        slope = slope_mat.at<float>(r, c);
+        return true;
+    }
+
 private:
     MapHandlerParams map_params_;
     int neighbor_Lnum_, neighbor_Hnum_;
@@ -201,18 +241,25 @@ private:
     Point3D initial_robot_pos_;
 
     cv::Mat risk_mask_mat_;
+    // 高度 高度差
     cv::Mat raw_h, inner_diff, valid_mask;
 
     cv::Mat grad_x, grad_y, slope_mat;
+
     // 坡度风险，高度风险，最终风险
     cv::Mat slope_risk, step_risk, final_risk;
     PointCloudPtr risk_cloud_;
     PointCloudPtr obstacle_cloud_output_;
+    PointCloudPtr steep_slope_cloud_output_, moderate_slope_cloud_output_;
     PointCloudRGB risk_cloud_rgb_;
     // ros::Publisher risk_debug_pub_;
 
     cv::Mat point_density_mat_;  // [新增] 点云密度图
     // cv::Mat occlusion_boundary_mask_;  // [新增] 遮挡边界掩膜
+    // [新增] 滞后阈值所需的历史状态
+    cv::Mat prev_steep_slope_mask_;
+    cv::Mat prev_moderate_slope_mask_;
+    bool is_first_classification_frame_;
 
     template <typename Position>
     static inline float NearestHeightOfPoint(const Position& p, float& dist_square) {

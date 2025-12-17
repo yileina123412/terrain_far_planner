@@ -43,7 +43,7 @@ void MapHandler::Init(const MapHandlerParams& params) {
     std::fill(util_remove_check_list_.begin(), util_remove_check_list_.end(), 0);
 
     // init terrain height map
-    int height_dim = std::ceil((map_params_.sensor_range + map_params_.cell_length) * 2.0f / FARUtil::kLeafSize);
+    int height_dim = std::ceil((map_params_.sensor_range + map_params_.cell_length) * 3.0f / FARUtil::kLeafSize);
     if (height_dim % 2 == 0) height_dim++;
     Eigen::Vector3i height_grid_size(height_dim, height_dim, 1);
     Eigen::Vector3d height_grid_origin(0, 0, 0);
@@ -62,6 +62,9 @@ void MapHandler::Init(const MapHandlerParams& params) {
     flat_terrain_cloud_ = PointCloudPtr(new pcl::PointCloud<PCLPoint>());
     risk_cloud_ = PointCloudPtr(new pcl::PointCloud<PCLPoint>());
     obstacle_cloud_output_ = PointCloudPtr(new pcl::PointCloud<PCLPoint>());
+    steep_slope_cloud_output_ = PointCloudPtr(new pcl::PointCloud<PCLPoint>());
+    moderate_slope_cloud_output_ = PointCloudPtr(new pcl::PointCloud<PCLPoint>());
+
     risk_cloud_rgb_ = PointCloudRGB(new pcl::PointCloud<pcl::PointXYZRGB>());
     ave_high_terrain_cloud_ = PointCloudPtr(new pcl::PointCloud<PCLPoint>());
     kdtree_terrain_clould_ = PointKdTreePtr(new pcl::KdTreeFLANN<PCLPoint>());
@@ -77,6 +80,11 @@ void MapHandler::Init(const MapHandlerParams& params) {
     steep_slope_cloud_ = PointCloudRGB(new pcl::PointCloud<pcl::PointXYZRGB>());
     moderate_slope_cloud_ = PointCloudRGB(new pcl::PointCloud<pcl::PointXYZRGB>());
     flat_terrain_cloud_rgb_ = PointCloudRGB(new pcl::PointCloud<pcl::PointXYZRGB>());
+
+    slope_cloud_ = PointCloudPtr(new pcl::PointCloud<PCLPoint>());
+
+    // [新增] 初始化滞后阈值状态
+    is_first_classification_frame_ = true;
 }
 
 void MapHandler::ResetGripMapCloud() {
@@ -422,7 +430,7 @@ void MapHandler::UpdateTerrainHeightGrid(const PointCloudPtr& freeCloudIn, const
     if (freeCloudIn->empty()) return;
     PointCloudPtr copy_free_ptr(new pcl::PointCloud<PCLPoint>());
     pcl::copyPointCloud(*freeCloudIn, *copy_free_ptr);
-    FARUtil::FilterCloud(copy_free_ptr, terrain_height_grid_->GetResolution());
+    // FARUtil::FilterCloud(copy_free_ptr, terrain_height_grid_->GetResolution());
     std::fill(terrain_grid_occupy_list_.begin(), terrain_grid_occupy_list_.end(), 0);
     for (const auto& point : copy_free_ptr->points) {
         Eigen::Vector3i csub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, 0.0f));
@@ -471,14 +479,17 @@ void MapHandler::CalculateAveHigh() {
         if (terrain_grid_occupy_list_[i] == 0) continue;
 
         const auto& height_vec = terrain_height_grid_->GetCell(i);
-        if (height_vec.empty()) continue;
+        if (height_vec.size() < 1) continue;
 
         // 计算该网格中所有高度的平均值
         float avg_height = 0.0f;
-        for (const float& height : height_vec) {
-            avg_height += height;
+        for (int i = 1; i < height_vec.size(); i++) {
+            avg_height += height_vec[i];
         }
-        avg_height /= height_vec.size();
+        // for (const float& height : height_vec) {
+        //     avg_height += height;
+        // }
+        avg_height /= height_vec.size() - 1;
 
         // 获取网格的3D位置
         Eigen::Vector3d grid_pos = terrain_height_grid_->Ind2Pos(i);
@@ -618,42 +629,9 @@ void MapHandler::RemoveObsCloudFromGrid(const PointCloudPtr& obsCloud) {
     }
 }
 
-// void MapHandler::GridToImg(cv::Mat& height_img, cv::Mat& var_img, cv::Mat& mask_img) {
-//     const Eigen::Vector3i dim = terrain_height_grid_->GetSize();
-//     height_img = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
-//     var_img = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
-//     mask_img = cv::Mat::zeros(dim.y(), dim.x(), CV_8UC1);
-
-//     // [新增] 记录点云密度
-//     cv::Mat density_img = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
-
-//     for (const auto& point : ave_high_terrain_cloud_->points) {
-//         // 获取行列坐标 (注意 OpenCV 行列与 Grid x,y 的对应)
-//         Eigen::Vector3i sub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, 0.0f));
-//         if (!terrain_height_grid_->InRange(sub)) continue;
-
-//         int r = sub.y();  // row -> y
-//         int c = sub.x();  // col -> x
-
-//         // 平均高度直接从点云获取
-//         height_img.at<float>(r, c) = point.z;
-
-//         // 格内落差需要从原始 grid 获取
-//         int ind = terrain_height_grid_->Sub2Ind(sub);
-//         const auto& heights = terrain_height_grid_->GetCell(ind);
-//         if (!heights.empty()) {
-//             float min_z = *std::min_element(heights.begin(), heights.end());
-//             float max_z = *std::max_element(heights.begin(), heights.end());
-//             var_img.at<float>(r, c) = max_z - min_z;
-//         }
-
-//         mask_img.at<uchar>(r, c) = 255;  // 有效标记
-//     }
-// }
-
 void MapHandler::GridToImg(cv::Mat& height_img, cv::Mat& var_img, cv::Mat& mask_img) {
     const Eigen::Vector3i dim = terrain_height_grid_->GetSize();
-    height_img = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
+    height_img = cv::Mat(dim.y(), dim.x(), CV_32FC1, cv::Scalar(std::numeric_limits<float>::quiet_NaN()));
     var_img = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
     mask_img = cv::Mat::zeros(dim.y(), dim.x(), CV_8UC1);
 
@@ -679,268 +657,370 @@ void MapHandler::GridToImg(cv::Mat& height_img, cv::Mat& var_img, cv::Mat& mask_
 
             // [新增] 记录点云数量
             point_density_mat_.at<float>(r, c) = heights.size();
+        } else {
+            var_img.at<float>(r, c) = std::numeric_limits<float>::quiet_NaN();
         }
 
         mask_img.at<uchar>(r, c) = 255;
     }
 }
 
-// 计算通行性的图
+// 计算可通行图
 void MapHandler::ComputeTerrainRiskAttributes() {
     if (!terrain_height_grid_) return;
 
-    // inner_diff:悬崖图
-
+    // ============================================================
+    // 步骤 1: 生成基础数据
+    // ============================================================
     GridToImg(raw_h, inner_diff, valid_mask);
 
-    // 1. 填补空洞 (形态学闭运算)
-    // 解决车底黑洞问题，但不乱补悬崖外
-    // 目的：把车底这种被包围的小黑洞填上，但不要把悬崖外面的大黑洞填上。
+    // 填补空洞（形态学闭运算）  先膨胀再腐蚀
     cv::Mat closed_mask;
-    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5));
-    // 执行闭运算：先膨胀再腐蚀
-    cv::morphologyEx(valid_mask, closed_mask, cv::MORPH_CLOSE, kernel);
+    cv::Mat close_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+    cv::morphologyEx(valid_mask, closed_mask, cv::MORPH_CLOSE, close_kernel);
+
+    const float SLOPE_THRESHOLD = 0.5f;  // 坡度阈值
+    const float STEP_THRESHOLD = 0.3f;   // 高度差阈值
 
     // ============================================================
-    // [新增] 检测遮挡边界：点云密度突然从有到无的地方
-    occlusion_boundary_mask_ = cv::Mat::zeros(valid_mask.rows, valid_mask.cols, CV_8UC1);
+    // 步骤 2: 检测遮挡边界
+    // ============================================================
 
-    float min_density_threshold = 2.0;  // 点云密度阈值
-    for (int r = 1; r < valid_mask.rows - 1; r++) {
-        for (int c = 1; c < valid_mask.cols - 1; c++) {
-            // 只检查有效数据格子
-            if (valid_mask.at<uchar>(r, c) == 255 && point_density_mat_.at<float>(r, c) >= min_density_threshold) {
-                // 检查四个方向的邻居，如果有无效格子，说明是边界
-                bool is_boundary = false;
-                if (valid_mask.at<uchar>(r - 1, c) == 0 ||  // 上
-                    valid_mask.at<uchar>(r + 1, c) == 0 ||  // 下
-                    valid_mask.at<uchar>(r, c - 1) == 0 ||  // 左
-                    valid_mask.at<uchar>(r, c + 1) == 0) {  // 右
-                    is_boundary = true;
+    int center_r = raw_h.rows / 2;
+    int center_c = raw_h.cols / 2;
+
+    occlusion_boundary_mask_ = cv::Mat::zeros(closed_mask.rows, closed_mask.cols, CV_8UC1);
+    const float MIN_DENSITY = 1.0f;  // 降低密度阈值
+
+    // [方法1] 从有效格子出发，检测边界
+    for (int r = 1; r < closed_mask.rows - 1; r++) {
+        for (int c = 1; c < closed_mask.cols - 1; c++) {
+            if (closed_mask.at<uchar>(r, c) == 255 && point_density_mat_.at<float>(r, c) >= MIN_DENSITY) {
+                // 检查8邻域（不只是4邻域）
+                bool has_invalid_neighbor = false;
+                for (int dr = -1; dr <= 1; dr++) {
+                    for (int dc = -1; dc <= 1; dc++) {
+                        if (dr == 0 && dc == 0) continue;
+                        if (closed_mask.at<uchar>(r + dr, c + dc) == 0) {
+                            has_invalid_neighbor = true;
+                            break;
+                        }
+                    }
+                    if (has_invalid_neighbor) break;
                 }
 
-                if (is_boundary) {
+                if (has_invalid_neighbor) {
                     occlusion_boundary_mask_.at<uchar>(r, c) = 255;
                 }
             }
         }
     }
-    // 膨胀边界掩膜，扩大清除范围（比如扩2-3个格子）
-    cv::Mat dilate_boundary_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(7, 7));
-    cv::dilate(occlusion_boundary_mask_, occlusion_boundary_mask_, dilate_boundary_kernel);
-    if (FARUtil::IsDebug) {
-        int boundary_count = cv::countNonZero(occlusion_boundary_mask_);
-        ROS_INFO_THROTTLE(2.0, "MH: Detected %d occlusion boundary cells", boundary_count);
-    }
 
-    // 2. 生成平滑后的高度图 (用于算坡度)
-    // 我们需要一张“连续”的高度图来算坡度，不能有断层。
-    cv::Mat filled_h = raw_h.clone();
+    // [方法2] 从无效格子出发，向外标记一圈边界（关键！）
+    for (int r = 1; r < closed_mask.rows - 1; r++) {
+        for (int c = 1; c < closed_mask.cols - 1; c++) {
+            // 如果当前是无效格子
+            if (closed_mask.at<uchar>(r, c) == 0) {
+                // 检查8邻域是否有有效格子
+                for (int dr = -1; dr <= 1; dr++) {
+                    for (int dc = -1; dc <= 1; dc++) {
+                        if (dr == 0 && dc == 0) continue;
+                        int nr = r + dr;
+                        int nc = c + dc;
 
-    // 简单的均值填补: 遍历闭运算补出来的区域
-    for (int r = 1; r < raw_h.rows - 1; r++) {
-        for (int c = 1; c < raw_h.cols - 1; c++) {
-            if (valid_mask.at<unsigned char>(r, c) == 0 && closed_mask.at<unsigned char>(r, c) == 255) {
-                float sum = 0.0f;
-                int count = 0;
-
-                // 遍历 3x3 邻域
-                for (int nr = -1; nr <= 1; ++nr) {
-                    for (int nc = -1; nc <= 1; ++nc) {
-                        // 边界检查 (虽然外层循环已避开边界，但为了通用性加上)
-                        if (r + nr < 0 || r + nr >= raw_h.rows || c + nc < 0 || c + nc >= raw_h.cols) continue;
-
-                        // 只统计原始数据中“有效”的点
-                        if (valid_mask.at<unsigned char>(r + nr, c + nc) == 255) {
-                            sum += raw_h.at<float>(r + nr, c + nc);
-                            count++;
+                        // 如果邻居是有效格子，标记为边界
+                        if (closed_mask.at<uchar>(nr, nc) == 255 &&
+                            point_density_mat_.at<float>(nr, nc) >= MIN_DENSITY) {
+                            occlusion_boundary_mask_.at<uchar>(nr, nc) = 255;
                         }
                     }
                 }
-
-                if (count > 0) {
-                    // 用周围有效点的平均值填补
-                    filled_h.at<float>(r, c) = sum / (float)count;
-                } else {
-                    // 如果周围一圈也没数据（极少见，除非是孤立噪声点），回退到继承左边的点
-                    filled_h.at<float>(r, c) = filled_h.at<float>(r, c - 1);
-                }
             }
         }
     }
 
-    // 3. 计算坡度 (Slope)  坡度图
-    // cv::Mat grad_x, grad_y, slope_mat;
+    // 膨胀遮挡边界
+    cv::Mat dilate_occlusion_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(7, 7));
+    cv::dilate(occlusion_boundary_mask_, occlusion_boundary_mask_, dilate_occlusion_kernel);
+
+    if (FARUtil::IsDebug) {
+        ROS_INFO_THROTTLE(2.0, "MH: Occlusion boundary cells: %d", cv::countNonZero(occlusion_boundary_mask_));
+    }
+
+    // ============================================================
+    // 步骤 3: 填补高度图并计算坡度
+    // ============================================================
+    cv::Mat filled_h = raw_h.clone();
+
+    // 改进填补策略：只填补被完全包围的小洞
+    for (int r = 2; r < raw_h.rows - 2; r++) {
+        for (int c = 2; c < raw_h.cols - 2; c++) {
+            float center_val = filled_h.at<float>(r, c);
+
+            // 跳过已有有效值的格子
+            if (!std::isnan(center_val)) continue;
+
+            // 检查5x5邻域，只有被有效数据"包围"的洞才填补
+            int valid_neighbor_count = 0;
+            float sum = 0.0f;
+
+            for (int nr = -2; nr <= 2; nr++) {
+                for (int nc = -2; nc <= 2; nc++) {
+                    if (nr == 0 && nc == 0) continue;
+                    float neighbor_val = raw_h.at<float>(r + nr, c + nc);
+                    if (!std::isnan(neighbor_val)) {
+                        sum += neighbor_val;
+                        valid_neighbor_count++;
+                    }
+                }
+            }
+
+            // 只有周围至少有20个(5x5=25个-1)有效点，才认为是"被包围的洞"
+            if (valid_neighbor_count >= 20) {
+                filled_h.at<float>(r, c) = sum / valid_neighbor_count;
+            }
+            // 否则保持 NaN，让后续 Sobel 自动忽略
+        }
+    }
+
+    // [新增] 在计算 Sobel 之前，把 NaN 替换为最近有效值（仅用于 Sobel 计算）
+    cv::Mat sobel_input = filled_h.clone();
+    for (int r = 0; r < sobel_input.rows; r++) {
+        for (int c = 0; c < sobel_input.cols; c++) {
+            if (std::isnan(sobel_input.at<float>(r, c))) {
+                // 向左搜索最近的有效值
+                float nearest_val = 0.0f;
+                for (int search_c = c - 1; search_c >= 0; search_c--) {
+                    if (!std::isnan(filled_h.at<float>(r, search_c))) {
+                        nearest_val = filled_h.at<float>(r, search_c);
+                        break;
+                    }
+                }
+                sobel_input.at<float>(r, c) = nearest_val;
+            }
+        }
+    }
+
+    // 计算坡度（使用处理后的输入）
     float res = terrain_height_grid_->GetResolution().x();
-    cv::Sobel(filled_h, grad_x, CV_32F, 1, 0, 3, 1.0 / (8.0 * res));
-    cv::Sobel(filled_h, grad_y, CV_32F, 0, 1, 3, 1.0 / (8.0 * res));
-    cv::magnitude(grad_x, grad_y, slope_mat);  // 计算每个像素点的模长
+    cv::Sobel(sobel_input, grad_x, CV_32F, 1, 0, 3, 1.0 / (8.0 * res));
+    cv::Sobel(sobel_input, grad_y, CV_32F, 0, 1, 3, 1.0 / (8.0 * res));
+    cv::magnitude(grad_x, grad_y, slope_mat);
 
-    // ------------------------------------------------------------------------
-    // [新增 2]：距离置信度衰减 (解决远处的假阳性/黄色闪烁)
-    // ------------------------------------------------------------------------
-    // 假设 grid 是以机器人为中心的 (local map)，那么图像中心就是机器人位置
-    int center_r = raw_h.rows / 2;
-    int center_c = raw_h.cols / 2;
-    float max_trust_dist = 15.0;    // 15米内完全信任
-    float decay_start_dist = 10.0;  // 10米开始衰减
-    for (int r = 0; r < slope_mat.rows; r++) {
-        for (int c = 0; c < slope_mat.cols; c++) {
-            // 计算物理距离 (米)
-            float dist = sqrt(pow(r - center_r, 2) + pow(c - center_c, 2)) * res;
+    // [新增] 基于邻域完整性过滤坡度
+    // [新增] 邻域完整性掩膜（0-255表示可信度）
+    cv::Mat slope_confidence_mask = cv::Mat::ones(slope_mat.rows, slope_mat.cols, CV_32FC1);
 
-            // 2. 远处坡度衰减
-            if (dist > decay_start_dist) {
-                float decay = 1.0f;
-                if (dist >= max_trust_dist) {
-                    decay = 0.1f;  // 极远处几乎不信
-                } else {
-                    // 线性衰减
-                    decay = 1.0f - (dist - decay_start_dist) / (max_trust_dist - decay_start_dist);
-                    if (decay < 0.1f) decay = 0.1f;
+    for (int r = 2; r < slope_mat.rows - 2; r++) {
+        for (int c = 2; c < slope_mat.cols - 2; c++) {
+            if (valid_mask.at<uchar>(r, c) == 0) {
+                slope_mat.at<float>(r, c) = 0.0f;
+                slope_confidence_mask.at<float>(r, c) = 0.0f;
+                continue;
+            }
+
+            // 检查3x3邻域的完整性
+            int valid_neighbor_count = 0;
+            for (int nr = -1; nr <= 1; nr++) {
+                for (int nc = -1; nc <= 1; nc++) {
+                    if (valid_mask.at<uchar>(r + nr, c + nc) == 255) {
+                        valid_neighbor_count++;
+                    }
                 }
-                // 压低远处的坡度值，让它变回蓝色或白色
-                slope_mat.at<float>(r, c) *= decay;
+            }
+
+            float confidence = valid_neighbor_count / 9.0f;
+
+            // 额外检查：如果5x5邻域稀疏，进一步降低
+            int extended_valid_count = 0;
+            for (int nr = -2; nr <= 2; nr++) {
+                for (int nc = -2; nc <= 2; nc++) {
+                    if (r + nr >= 0 && r + nr < valid_mask.rows && c + nc >= 0 && c + nc < valid_mask.cols &&
+                        valid_mask.at<uchar>(r + nr, c + nc) == 255) {
+                        extended_valid_count++;
+                    }
+                }
+            }
+
+            if (extended_valid_count < 20) {  // 5x5有25个格子，至少要有20个
+                float extended_confidence = extended_valid_count / 25.0f;
+                confidence *= extended_confidence;
+            }
+
+            // 保存可信度，但不直接修改 slope_mat
+            slope_confidence_mask.at<float>(r, c) = confidence;
+
+            // [关键改进] 只对低可信度 + 高坡度的情况进行衰减
+            // 避免把真实陡坡也衰减掉
+            if (confidence < 0.7f && slope_mat.at<float>(r, c) > SLOPE_THRESHOLD) {
+                slope_mat.at<float>(r, c) *= confidence;
             }
         }
     }
 
-    // 4. 生成 Risk Mask
+    if (FARUtil::IsDebug) {
+        ROS_INFO_THROTTLE(2.0, "MH: Neighborhood integrity filtering applied");
+    }
 
-    // 阈值：坡度 > 0.5 (约26度)，格内落差 > 0.3m
-    cv::threshold(slope_mat, slope_risk, 0.5, 255, cv::THRESH_BINARY);
-    cv::threshold(inner_diff, step_risk, 0.3, 255, cv::THRESH_BINARY);
+    // ============================================================
+    // 步骤 4: 生成初步风险掩膜
+    // ============================================================
 
-    // 去除红色零星噪点
-    // 定义一个很小的核，比如 3x3
-    cv::Mat remove_noise_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
-    // 执行开运算：消除孤立点
-    cv::morphologyEx(step_risk, step_risk, cv::MORPH_OPEN, remove_noise_kernel);
+    cv::threshold(slope_mat, slope_risk, SLOPE_THRESHOLD, 255, cv::THRESH_BINARY);
+    cv::threshold(inner_diff, step_risk, STEP_THRESHOLD, 255, cv::THRESH_BINARY);
 
     slope_risk.convertTo(slope_risk, CV_8UC1);
     step_risk.convertTo(step_risk, CV_8UC1);
 
-    // [新增步骤]：粘合黄色区域 (Morphological Glue)
-    // 目的：把断断续续的坡度噪点连成一个完整的“可通行坡面”
-    // =========================================================
-    // cv::Mat glue_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
-    // cv::dilate(slope_risk, slope_risk, glue_kernel);
-    // cv::erode(slope_risk, slope_risk, glue_kernel);
-    // 闭运算 = 先膨胀后腐蚀，能填补内部小黑洞，连接断裂的线
-    // cv::morphologyEx(slope_risk, slope_risk, cv::MORPH_CLOSE, glue_kernel);
+    // 去除红色噪点（开运算）
+    cv::Mat remove_noise_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+    cv::morphologyEx(step_risk, step_risk, cv::MORPH_OPEN, remove_noise_kernel);
 
-    // [修改] 初始化：检查是否需要屏蔽陡坡风险（黄色）
+    // ============================================================
+    // 步骤 5: 初始化阶段屏蔽
+    // ============================================================
     if (!risk_map_ready_) {
-        float dist_moved = sqrt(
-            pow(FARUtil::robot_pos.x - initial_robot_pos_.x, 2) + pow(FARUtil::robot_pos.y - initial_robot_pos_.y, 2));
-        if (dist_moved < 1.0) {
-            // 只清除机器人周围1.5米半径的黄色陡坡风险
-            float clear_radius = 1.5;  // 清除半径1.5米
+        float dist_moved = std::sqrt(std::pow(FARUtil::robot_pos.x - initial_robot_pos_.x, 2) +
+                                     std::pow(FARUtil::robot_pos.y - initial_robot_pos_.y, 2));
+
+        if (dist_moved < 1.0f) {
+            const float CLEAR_RADIUS = 1.5f;
             for (int r = 0; r < slope_risk.rows; r++) {
                 for (int c = 0; c < slope_risk.cols; c++) {
-                    float dist = sqrt(pow(r - center_r, 2) + pow(c - center_c, 2)) * res;
-                    if (dist < clear_radius) {
-                        slope_risk.at<uchar>(r, c) = 0;  // 只清零半径内的陡坡风险
+                    float dist = std::sqrt(std::pow(r - center_r, 2) + std::pow(c - center_c, 2)) * res;
+                    if (dist < CLEAR_RADIUS) {
+                        slope_risk.at<uchar>(r, c) = 0;
                     }
                 }
             }
             if (FARUtil::IsDebug) {
-                ROS_INFO_THROTTLE(1.0, "MH: Slope risk within %.1fm suppressed, moved %.2fm", clear_radius, dist_moved);
+                ROS_INFO_THROTTLE(
+                    1.0, "MH: Slope risk suppressed (radius %.1fm, moved %.2fm)", CLEAR_RADIUS, dist_moved);
             }
         } else {
             risk_map_ready_ = true;
             if (FARUtil::IsDebug) {
-                ROS_INFO("MH: Risk map fully activated after moving %.2f meters.", dist_moved);
+                ROS_INFO("MH: Risk map activated after %.2fm movement", dist_moved);
             }
         }
     }
 
-    // 消除墙壁周围的虚假陡坡 (Red Swallows Yellow)
-    // 1. 定义膨胀核：3x3 刚好对应你观察到的“一圈宽度一个点”
-    cv::Mat dilate_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
-    // 2. 对红色(硬障碍)进行膨胀，生成“红墙+红晕”的掩膜
+    // ============================================================
+    // 步骤 6: 红色吞噬黄色（消除墙壁周围虚假陡坡）
+    // ============================================================
+    cv::Mat dilate_step_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(7, 7));
     cv::Mat dilated_step_risk;
-    cv::dilate(step_risk, dilated_step_risk, dilate_kernel);
-    // 3. 从黄色(陡坡)中扣除这个掩膜
-    // 逻辑：如果一个点在红色膨胀区内，它就不能是黄色
-    // bitwise_not: 把 255 变成 0
+    cv::dilate(step_risk, dilated_step_risk, dilate_step_kernel);
+
     cv::Mat not_red_zone;
     cv::bitwise_not(dilated_step_risk, not_red_zone);
-    // bitwise_and: 只有在非红区，黄色才能保留
     cv::bitwise_and(slope_risk, not_red_zone, slope_risk);
+
+    // 合并最终风险
     cv::bitwise_or(slope_risk, step_risk, final_risk);
 
-    // 5. [最关键一步] 过滤边界噪声
-    // 只保留“被有效区域包围”的风险，去掉地图边缘的风险
+    // 过滤地图边缘噪声
     cv::Mat safe_zone;
-    cv::Mat erode_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(7, 7));
-    cv::erode(valid_mask, safe_zone, erode_kernel);          // 腐蚀有效区域
-    cv::bitwise_and(final_risk, safe_zone, risk_mask_mat_);  // 赋值给成员变量
+    cv::Mat erode_boundary_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(7, 7));
+    cv::erode(valid_mask, safe_zone, erode_boundary_kernel);
+    cv::bitwise_and(final_risk, safe_zone, risk_mask_mat_);
 
-    // [新增] 生成五类地形的独立 CV 图和点云
     // ============================================================
-
-    // 1. 初始化五类 CV 图（全零）
+    // 步骤 7: 生成五类地形掩膜（带滞后阈值）
+    // ============================================================
     obstacle_mask_ = cv::Mat::zeros(valid_mask.rows, valid_mask.cols, CV_8UC1);
-    // occlusion_boundary_mask_ 已经在前面生成了，不需要重新初始化
     steep_slope_mask_ = cv::Mat::zeros(valid_mask.rows, valid_mask.cols, CV_8UC1);
     moderate_slope_mask_ = cv::Mat::zeros(valid_mask.rows, valid_mask.cols, CV_8UC1);
     flat_terrain_mask_ = cv::Mat::zeros(valid_mask.rows, valid_mask.cols, CV_8UC1);
 
-    // 2. 清空五类点云
+    const float SLOPE_LOW = 0.42f;   // 滞后下限
+    const float SLOPE_HIGH = 0.48f;  // 滞后上限
+    const float MODERATE_MIN = 0.2f;
+
+    for (int r = 0; r < valid_mask.rows; r++) {
+        for (int c = 0; c < valid_mask.cols; c++) {
+            float slope_val = slope_mat.at<float>(r, c);
+            float step_val = inner_diff.at<float>(r, c);
+
+            // 优先级1: 障碍物
+            if (step_risk.at<uchar>(r, c) > 100) {
+                obstacle_mask_.at<uchar>(r, c) = 255;
+                occlusion_boundary_mask_.at<uchar>(r, c) = 0;  // 障碍物覆盖遮挡
+                continue;
+            }
+
+            // 优先级2: 陡坡（带滞后）
+            bool is_steep = slope_risk.at<uchar>(r, c) > 100;
+            if (!is_first_classification_frame_ && prev_steep_slope_mask_.at<uchar>(r, c) > 100) {
+                // 上一帧是陡坡，需要降到下限才变缓坡
+                is_steep = (slope_val > SLOPE_LOW);
+            } else if (!is_first_classification_frame_ && prev_moderate_slope_mask_.at<uchar>(r, c) > 100) {
+                // 上一帧是缓坡，需要升到上限才变陡坡
+                is_steep = (slope_val > SLOPE_HIGH);
+            }
+
+            if (is_steep) {
+                steep_slope_mask_.at<uchar>(r, c) = 255;
+                continue;
+            }
+
+            // 优先级3: 缓坡
+            if (slope_val >= MODERATE_MIN && slope_val < SLOPE_HIGH && step_val < STEP_THRESHOLD) {
+                moderate_slope_mask_.at<uchar>(r, c) = 255;
+                continue;
+            }
+
+            // 优先级4: 平地
+            if (valid_mask.at<uchar>(r, c) == 255) {
+                flat_terrain_mask_.at<uchar>(r, c) = 255;
+            }
+        }
+    }
+
+    // 轻度形态学处理（融合碎片，但不过度）
+    cv::Mat morph_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));  // 缩小到3x3
+    cv::morphologyEx(steep_slope_mask_, steep_slope_mask_, cv::MORPH_CLOSE, morph_kernel);
+    cv::morphologyEx(moderate_slope_mask_, moderate_slope_mask_, cv::MORPH_CLOSE, morph_kernel);
+
+    // 保存当前帧状态
+    prev_steep_slope_mask_ = steep_slope_mask_.clone();
+    prev_moderate_slope_mask_ = moderate_slope_mask_.clone();
+    is_first_classification_frame_ = false;
+
+    // ============================================================
+    // 步骤 8: 生成五类地形点云
+    // ============================================================
     obstacle_cloud_->clear();
     occlusion_cloud_->clear();
     steep_slope_cloud_->clear();
     moderate_slope_cloud_->clear();
     flat_terrain_cloud_rgb_->clear();
 
-    // 3. 遍历每个格子，按优先级分配到五类中
-    for (int r = 0; r < valid_mask.rows; r++) {
-        for (int c = 0; c < valid_mask.cols; c++) {
-            float slope_val = slope_mat.at<float>(r, c);
-            float step_val = inner_diff.at<float>(r, c);
-
-            // 先只填充 CV 图,不生成点云
-            if (step_risk.at<uchar>(r, c) > 100) {
-                obstacle_mask_.at<uchar>(r, c) = 255;
-                occlusion_boundary_mask_.at<uchar>(r, c) = 0;
-            } else if (slope_risk.at<uchar>(r, c) > 100) {
-                steep_slope_mask_.at<uchar>(r, c) = 255;
-            } else if (slope_val >= 0.176 && slope_val < 0.364 && step_val < 0.3) {
-                moderate_slope_mask_.at<uchar>(r, c) = 255;
-            } else if (valid_mask.at<uchar>(r, c) == 255) {
-                flat_terrain_mask_.at<uchar>(r, c) = 255;
-            }
-        }
-    }
-
-    // [新增] 对陡坡进行形态学处理,融合碎片
-    cv::Mat morph_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5));
-    cv::morphologyEx(steep_slope_mask_, steep_slope_mask_, cv::MORPH_CLOSE, morph_kernel);
-
-    // [新增] 对缓坡也做同样处理
-    cv::morphologyEx(moderate_slope_mask_, moderate_slope_mask_, cv::MORPH_CLOSE, morph_kernel);
     obstacle_cloud_output_->clear();
-    // 4. 根据处理后的 CV 图生成点云
+    steep_slope_cloud_output_->clear();
+    moderate_slope_cloud_output_->clear();
+
     for (int r = 0; r < valid_mask.rows; r++) {
         for (int c = 0; c < valid_mask.cols; c++) {
             int ind = terrain_height_grid_->Sub2Ind(c, r, 0);
             Eigen::Vector3d pos = terrain_height_grid_->Ind2Pos(ind);
-            PCLPoint pc;
-            pc.x = pos.x();
-            pc.y = pos.y();
-            pc.z = 0.0;
 
             PointRGB p;
             p.x = pos.x();
             p.y = pos.y();
-            p.z = pos.z();
+            p.z = raw_h.at<float>(r, c);
+
+            PCLPoint pc;
+            pc.x = pos.x();
+            pc.y = pos.y();
+            pc.z = raw_h.at<float>(r, c);
 
             if (obstacle_mask_.at<uchar>(r, c) > 100) {
                 p.r = 255;
                 p.g = 0;
                 p.b = 0;
                 obstacle_cloud_->push_back(p);
+
                 obstacle_cloud_output_->push_back(pc);
             } else if (occlusion_boundary_mask_.at<uchar>(r, c) > 100) {
                 bool is_map_edge = (r < 5 || r >= valid_mask.rows - 5 || c < 5 || c >= valid_mask.cols - 5);
@@ -959,11 +1039,14 @@ void MapHandler::ComputeTerrainRiskAttributes() {
                 p.g = 255;
                 p.b = 0;
                 steep_slope_cloud_->push_back(p);
+
+                steep_slope_cloud_output_->push_back(pc);
             } else if (moderate_slope_mask_.at<uchar>(r, c) > 100) {
                 p.r = 0;
                 p.g = 0;
                 p.b = 255;
                 moderate_slope_cloud_->push_back(p);
+                moderate_slope_cloud_output_->push_back(pc);
             } else if (flat_terrain_mask_.at<uchar>(r, c) > 100) {
                 p.r = 255;
                 p.g = 255;
@@ -972,16 +1055,53 @@ void MapHandler::ComputeTerrainRiskAttributes() {
             }
         }
     }
+    // [新增] 过滤 NaN 点
+    if (!obstacle_cloud_output_->empty()) {
+        FARUtil::RemoveNanInfPoints(obstacle_cloud_output_);
+    }
+    if (!steep_slope_cloud_output_->empty()) {
+        FARUtil::RemoveNanInfPoints(steep_slope_cloud_output_);
+    }
+    if (!moderate_slope_cloud_output_->empty()) {
+        FARUtil::RemoveNanInfPoints(moderate_slope_cloud_output_);
+    }
 
     if (FARUtil::IsDebug) {
-        ROS_INFO_THROTTLE(2.0,
-            "MH: Terrain Classification - Obstacle: %lu, Occlusion: %lu, Steep: %lu, Moderate: %lu, Flat: %lu",
+        ROS_INFO_THROTTLE(2.0, "MH: Terrain - Obstacle:%lu Occlusion:%lu Steep:%lu Moderate:%lu Flat:%lu",
             obstacle_cloud_->size(), occlusion_cloud_->size(), steep_slope_cloud_->size(),
             moderate_slope_cloud_->size(), flat_terrain_cloud_rgb_->size());
     }
 
-    // **DEBUG**: 发布出去看看！
-    // PublishRiskMapViz();
+    // ============================================================
+    // 步骤 9: 生成坡度可视化点云
+    // ============================================================
+    slope_cloud_->clear();
+    for (int r = 0; r < slope_mat.rows; r++) {
+        for (int c = 0; c < slope_mat.cols; c++) {
+            if (valid_mask.at<uchar>(r, c) == 0) continue;
+
+            int ind = terrain_height_grid_->Sub2Ind(c, r, 0);
+            Eigen::Vector3d pos = terrain_height_grid_->Ind2Pos(ind);
+
+            PCLPoint p;
+            p.x = pos.x();
+            p.y = pos.y();
+            p.z = raw_h.at<float>(r, c);
+            p.intensity = slope_mat.at<float>(r, c);
+
+            slope_cloud_->push_back(p);
+        }
+    }
+
+    slope_cloud_->width = slope_cloud_->size();
+    slope_cloud_->height = 1;
+    slope_cloud_->is_dense = false;
+    slope_cloud_->header.frame_id = FARUtil::worldFrameId;
+    slope_cloud_->header.stamp = pcl_conversions::toPCL(ros::Time::now());
+
+    if (FARUtil::IsDebug) {
+        ROS_INFO_THROTTLE(2.0, "MH: Slope cloud: %lu points", slope_cloud_->size());
+    }
 }
 
 void MapHandler::PublishRiskMapViz() {

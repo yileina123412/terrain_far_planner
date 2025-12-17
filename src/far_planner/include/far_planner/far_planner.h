@@ -57,6 +57,8 @@ private:
     ros::Publisher moderate_slope_pub_;
     ros::Publisher flat_terrain_pub_;
 
+    ros::Publisher slop_cloud_pub_;
+
     ros::Timer planning_event_;
     std_msgs::Float32 runtimer_, plan_timer_;
 
@@ -93,6 +95,10 @@ private:
 
     CTNodeStack new_ctnodes_;
     std::vector<PointStack> realworld_contour_;
+    // 陡坡的采样点
+    std::vector<PointStack> steep_boundary_clusters_;  // 每个元素是一个聚类的边界点
+    std::vector<PointStack> steep_inner_clusters_;     // 每个元素是一个聚类的内部点
+    PointCloudPtr steep_cloud_;
 
     tf::TransformListener* tf_listener_;
 
