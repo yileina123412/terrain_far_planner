@@ -55,7 +55,17 @@ CDetector/steep_max_cluster_size        : 10000  # 最大聚类点数
 CDetector/steep_boundary_sample_dist    : 2.0    # 边界采样间距(米)
 CDetector/steep_inner_voxel_size        : 2.0    # 内部体素大小(米), 越大越稀疏
 CDetector/steep_concave_alpha           : 1.0    # [新增] 凹包alpha值(0.5-2.0), 越小越贴合原始形状
-CDetector/steep_smooth_window           : 3      # [新增] 边界平滑窗口(1-5), 越大越平滑
+CDetector/steep_smooth_window           : 2      # [新增] 边界平滑窗口(1-5), 越大越平滑
+CDetector/steep_corner_angle_threshold  : 30.0   # [新增] 拐点角度阈值(度), 超过此角度认为是拐点
+# 缓坡处理参数
+CDetector/moderate_crop_radius             : 25.0   # 缓坡裁剪半径(米)
+CDetector/moderate_cluster_tolerance       : 0.5    # 聚类容差(米)
+CDetector/moderate_min_cluster_size        : 30     # 最小聚类点数
+CDetector/moderate_max_cluster_size        : 20000  # 最大聚类点数
+CDetector/moderate_boundary_sample_dist    : 3.0    # 边界采样间距(米，更稀疏)
+CDetector/moderate_inner_voxel_size        : 4.0   # 内部体素大小(米，更稀疏)
+CDetector/moderate_concave_alpha           : 0.5    # 凹包alpha值(能提取圆环)
+CDetector/moderate_smooth_window           : 3      # 边界平滑窗口
 
 # Graph Planner Params
 GPlanner/converge_distance              : 0.5  # Unit: meter

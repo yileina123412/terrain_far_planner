@@ -21,6 +21,7 @@ void DPVisualizer::Init(const ros::NodeHandle& nh) {
     viz_view_extend = nh_.advertise<MarkerArray>("/viz_viewpoint_extend_topic", 5);
 
     viz_steep_clusters_pub_ = nh_.advertise<MarkerArray>("/viz_steep_clusters_topic", 5);
+    viz_moderate_clusters_pub_ = nh_.advertise<MarkerArray>("/viz_moderate_clusters_topic", 5);  // [新增]
 }
 
 void DPVisualizer::VizNodes(const NodePtrStack& node_stack, const std::string& ns, const VizColor& color,
@@ -528,4 +529,63 @@ void DPVisualizer::VizSteepSlopeClusters(
     viz_steep_clusters_pub_.publish(cluster_marker_array);
 
     ROS_INFO("Viz: Published %lu steep slope clusters", boundary_clusters.size());
+}
+
+void DPVisualizer::VizModerateSlopeClusters(
+    const std::vector<PointStack>& boundary_clusters, const std::vector<PointStack>& inner_clusters) {
+    // if (boundary_clusters.empty() || inner_clusters.empty()) {
+    //     ROS_WARN("Viz: No moderate slope clusters to visualize");
+    //     return;
+    // }
+
+    MarkerArray cluster_marker_array;
+
+    // 定义颜色循环（与陡坡不同的配色方案）
+    std::vector<VizColor> colors = {VizColor::GREEN, VizColor::YELLOW, VizColor::EMERALD, VizColor::ORANGE,
+        VizColor::PURPLE, VizColor::MAGNA, VizColor::RED, VizColor::WHITE};
+
+    // 遍历每个聚类
+    for (size_t i = 0; i < inner_clusters.size(); i++) {
+        // 选择颜色（循环使用）
+        VizColor boundary_color = colors[i % colors.size()];
+        VizColor inner_color = colors[(i + 1) % colors.size()];  // 内部点用下一个颜色
+
+        // 边界点 Marker（使用圆柱体，与陡坡的球体区分）
+        Marker boundary_marker;
+        boundary_marker.type = Marker::SPHERE_LIST;
+        std::string boundary_ns = "moderate_boundary_" + std::to_string(i);
+        this->SetMarker(boundary_color, boundary_ns, 0.5f, 0.7f, boundary_marker);
+
+        for (const auto& p : boundary_clusters[i]) {
+            geometry_msgs::Point geo_p = FARUtil::Point3DToGeoMsgPoint(p);
+            boundary_marker.points.push_back(geo_p);
+        }
+
+        // 内部点 Marker（使用较大的立方体）
+        Marker inner_marker;
+        inner_marker.type = Marker::CUBE_LIST;
+        std::string inner_ns = "moderate_inner_" + std::to_string(i);
+        this->SetMarker(inner_color, inner_ns, 0.8f, 0.5f, inner_marker);
+
+        for (const auto& p : inner_clusters[i]) {
+            geometry_msgs::Point geo_p = FARUtil::Point3DToGeoMsgPoint(p);
+            inner_marker.points.push_back(geo_p);
+        }
+
+        // 添加到 MarkerArray
+        if (!boundary_marker.points.empty()) {
+            cluster_marker_array.markers.push_back(boundary_marker);
+        }
+        if (!inner_marker.points.empty()) {
+            cluster_marker_array.markers.push_back(inner_marker);
+        }
+
+        ROS_INFO("Viz: Moderate cluster %lu - boundary: %lu points (cylinders), inner: %lu points (cubes)", i,
+            boundary_clusters[i].size(), inner_clusters[i].size());
+    }
+
+    // 发布可视化
+    viz_moderate_clusters_pub_.publish(cluster_marker_array);
+
+    ROS_INFO("Viz: Published %lu moderate slope clusters", boundary_clusters.size());
 }

@@ -19,14 +19,25 @@ struct ContourDetectParams {
     std::string img_path;
 
     // [新增] 陡坡处理参数
-    float steep_crop_radius;           // 陡坡点云裁剪半径(米)
-    float steep_cluster_tolerance;     // 聚类容差(米)
-    int steep_min_cluster_size;        // 最小聚类点数
-    int steep_max_cluster_size;        // 最大聚类点数
-    float steep_boundary_sample_dist;  // 边界采样间距(米)
-    float steep_inner_voxel_size;      // 内部体素滤波大小(米)
-    float steep_concave_alpha;         // [新增] 凹包alpha值
-    int steep_smooth_window;           // [新增] 边界平滑窗口大小
+    float steep_crop_radius;             // 陡坡点云裁剪半径(米)
+    float steep_cluster_tolerance;       // 聚类容差(米)
+    int steep_min_cluster_size;          // 最小聚类点数
+    int steep_max_cluster_size;          // 最大聚类点数
+    float steep_boundary_sample_dist;    // 边界采样间距(米)
+    float steep_inner_voxel_size;        // 内部体素滤波大小(米)
+    float steep_concave_alpha;           // [新增] 凹包alpha值
+    int steep_smooth_window;             // [新增] 边界平滑窗口大小
+    float steep_corner_angle_threshold;  // [新增] 拐点角度阈值(度)
+
+    // [新增] 缓坡处理参数
+    float moderate_crop_radius;
+    float moderate_cluster_tolerance;
+    int moderate_min_cluster_size;
+    int moderate_max_cluster_size;
+    float moderate_boundary_sample_dist;
+    float moderate_inner_voxel_size;
+    float moderate_concave_alpha;
+    int moderate_smooth_window;
 };
 
 class ContourDetector {
@@ -208,9 +219,17 @@ private:
         }
     }
 
-    // [新增] 陡坡处理辅助函数
+    // 陡坡处理辅助函数
     void ExtractBoundaryPoints(const PointCloudPtr& cluster, PointStack& boundary_points);
     void ExtractInnerPoints(PointCloudPtr& cluster, PointStack& inner_points);
+
+    // 缓坡处理辅助函数
+    void ExtractModerateBoundaryPoints(const PointCloudPtr& cluster, PointStack& boundary_points);
+    void ExtractModerateInnerPoints(PointCloudPtr& cluster, PointStack& inner_points);
+
+    // [新增] 轮廓均匀采样辅助函数
+    void SampleContourUniformly(const std::vector<PCLPoint>& contour, pcl::KdTreeFLANN<PCLPoint>& kdtree,
+        const PointCloudPtr& cluster, PointStack& sampled_points, float sample_dist);
 
 public:
     ContourDetector() = default;
@@ -228,14 +247,6 @@ public:
         std::vector<PointStack>& realworl_contour);
 
     /**
-     * [新增] 直接从 CV 图提取轮廓
-     * @param mask_img 输入的二值图(如 obstacle_mask_)
-     * @param odom_node_ptr 当前机器人位置节点
-     * @param realworld_contour [返回] 世界坐标系下的轮廓点
-     */
-    void ExtractContoursFromMask(
-        const cv::Mat& mask_img, const NavNodePtr& odom_node_ptr, std::vector<PointStack>& realworld_contour);
-    /**
      * [新增] 从陡坡点云中提取边界点和内部点（按聚类分组）
      * @param steep_cloud 陡坡点云
      * @param odom_node_ptr 当前机器人位置节点
@@ -244,6 +255,17 @@ public:
      */
     void ExtractSteepSlopePoints(const PointCloudPtr& steep_cloud, const NavNodePtr& odom_node_ptr,
         std::vector<PointStack>& boundary_clusters, std::vector<PointStack>& inner_clusters);
+
+    /**
+     * [新增] 从缓坡点云中提取边界点和内部点（按聚类分组）
+     * @param moderate_cloud 缓坡点云
+     * @param odom_node_ptr 当前机器人位置节点
+     * @param boundary_clusters [返回] 每个聚类的边界点集合
+     * @param inner_clusters [返回] 每个聚类的内部点集合
+     */
+    void ExtractModerateSlopePoints(const PointCloudPtr& moderate_cloud, const NavNodePtr& odom_node_ptr,
+        std::vector<PointStack>& boundary_clusters, std::vector<PointStack>& inner_clusters);
+
     /**
      * Show Corners on Pointcloud projection image
      * @param img_mat pointcloud projection image

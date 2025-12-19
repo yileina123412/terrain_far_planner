@@ -173,22 +173,19 @@ void FARMaster::Loop() {
         }
         /* Extract Vertices and new nodes */
         FARUtil::Timer.start_time("Total V-Graph Update");
-        ROS_INFO("start ExtractContoursFromMask");
 
         // cv::Mat obstacle_mask = map_handler_.GetObstacleMask();
         PointCloudPtr obstacle_cloud = map_handler_.GetObsOutCloud();
-        // PointCloudPtr slop_cloud = map_handler_.GetSteepOutCloud();
-        // // 新建一个合并后的点云
-        // PointCloudPtr merged_cloud(new pcl::PointCloud<PCLPoint>());
-        // // 先添加障碍物点云
-        // *merged_cloud += *obstacle_cloud;
-        // // 再添加坡度点云
-        // *merged_cloud += *slop_cloud;
+
         contour_detector_.BuildTerrainImgAndExtractContour(odom_node_ptr_, obstacle_cloud, realworld_contour_);
         steep_cloud_ = map_handler_.GetSteepOutCloud();
         // 提取陡坡的边界
         contour_detector_.ExtractSteepSlopePoints(
             steep_cloud_, odom_node_ptr_, steep_boundary_clusters_, steep_inner_clusters_);
+        // 提取缓坡的边界
+        moderate_cloud_ = map_handler_.GetModerateOutCloud();
+        contour_detector_.ExtractModerateSlopePoints(
+            moderate_cloud_, odom_node_ptr_, moderate_boundary_clusters_, moderate_inner_clusters_);
 
         contour_graph_.UpdateContourGraph(odom_node_ptr_, realworld_contour_);
         if (is_graph_init_) {
@@ -253,7 +250,7 @@ void FARMaster::Loop() {
         planner_viz_.VizContourGraph(ContourGraph::contour_graph_);
         // planner_viz_.VizGlobalPolygons(ContourGraph::global_contour_, ContourGraph::unmatched_contour_);
         planner_viz_.VizSteepSlopeClusters(steep_boundary_clusters_, steep_inner_clusters_);
-
+        planner_viz_.VizModerateSlopeClusters(moderate_boundary_clusters_, moderate_inner_clusters_);
         if (is_graph_init_) {
             if (FARUtil::IsDebug) {
                 std::cout << " ========================================================== " << std::endl;
@@ -567,6 +564,18 @@ void FARMaster::LoadROSParams() {
     nh.param<float>(cdetect_prefix + "steep_inner_voxel_size", cdetect_params_.steep_inner_voxel_size, 1.0f);
     nh.param<float>(cdetect_prefix + "steep_concave_alpha", cdetect_params_.steep_concave_alpha, 1.0f);  // [新增]
     nh.param<int>(cdetect_prefix + "steep_smooth_window", cdetect_params_.steep_smooth_window, 3);       // [新增]
+    nh.param<float>(
+        cdetect_prefix + "steep_corner_angle_threshold", cdetect_params_.steep_corner_angle_threshold, 30.0f);
+    // [新增] 缓坡处理参数
+    nh.param<float>(cdetect_prefix + "moderate_crop_radius", cdetect_params_.moderate_crop_radius, 20.0f);
+    nh.param<float>(cdetect_prefix + "moderate_cluster_tolerance", cdetect_params_.moderate_cluster_tolerance, 1.0f);
+    nh.param<int>(cdetect_prefix + "moderate_min_cluster_size", cdetect_params_.moderate_min_cluster_size, 30);
+    nh.param<int>(cdetect_prefix + "moderate_max_cluster_size", cdetect_params_.moderate_max_cluster_size, 20000);
+    nh.param<float>(
+        cdetect_prefix + "moderate_boundary_sample_dist", cdetect_params_.moderate_boundary_sample_dist, 4.0f);
+    nh.param<float>(cdetect_prefix + "moderate_inner_voxel_size", cdetect_params_.moderate_inner_voxel_size, 4.0f);
+    nh.param<float>(cdetect_prefix + "moderate_concave_alpha", cdetect_params_.moderate_concave_alpha, 2.0f);
+    nh.param<int>(cdetect_prefix + "moderate_smooth_window", cdetect_params_.moderate_smooth_window, 5);
 }
 
 void FARMaster::OdomCallBack(const nav_msgs::OdometryConstPtr& msg) {

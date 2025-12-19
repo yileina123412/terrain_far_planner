@@ -409,7 +409,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: RGB8
       Decay Time: 0
-      Enabled: false
+      Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Min Color: 0; 0; 0
@@ -424,7 +424,7 @@ Visualization Manager:
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
-      Value: false
+      Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -437,7 +437,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: RGB8
       Decay Time: 0
-      Enabled: false
+      Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Min Color: 0; 0; 0
@@ -452,7 +452,7 @@ Visualization Manager:
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
-      Value: false
+      Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -465,7 +465,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: RGB8
       Decay Time: 0
-      Enabled: false
+      Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Min Color: 0; 0; 0
@@ -480,7 +480,7 @@ Visualization Manager:
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
-      Value: false
+      Value: true
     - Class: rviz/MarkerArray
       Enabled: true
       Marker Topic: /viz_contour_topic
@@ -582,7 +582,34 @@ Visualization Manager:
       Name: 陡坡提取
       Namespaces:
         steep_boundary_0: true
+        steep_boundary_1: true
+        steep_boundary_2: true
         steep_inner_0: true
+        steep_inner_1: true
+        steep_inner_2: true
+      Queue Size: 100
+      Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /viz_moderate_clusters_topic
+      Name: 缓坡采样点
+      Namespaces:
+        moderate_boundary_0: true
+        moderate_boundary_1: true
+        moderate_boundary_2: true
+        moderate_boundary_3: true
+        moderate_boundary_4: true
+        moderate_boundary_5: true
+        moderate_boundary_6: true
+        moderate_boundary_7: true
+        moderate_inner_0: true
+        moderate_inner_1: true
+        moderate_inner_2: true
+        moderate_inner_3: true
+        moderate_inner_4: true
+        moderate_inner_5: true
+        moderate_inner_6: true
+        moderate_inner_7: true
       Queue Size: 100
       Value: true
   Enabled: true
@@ -603,7 +630,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 48.44692611694336
+      Distance: 33.40696716308594
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -611,9 +638,9 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 9.706707000732422
-        Y: 10.434460639953613
-        Z: 1.2861603498458862
+        X: 8.962373733520508
+        Y: 11.42943286895752
+        Z: 1.2871171236038208
       Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
@@ -621,7 +648,7 @@ Visualization Manager:
       Near Clip Distance: 0.009999999776482582
       Pitch: 1.5697963237762451
       Target Frame: map
-      Yaw: 4.71042537689209
+      Yaw: 4.690425395965576
     Saved: ~
 Window Geometry:
   ControlPanel:

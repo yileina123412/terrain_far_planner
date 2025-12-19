@@ -94,11 +94,15 @@ private:
     NodePtrStack clear_nodes_;
 
     CTNodeStack new_ctnodes_;
-    std::vector<PointStack> realworld_contour_;
+    std::vector<PointStack> realworld_contour_;  // 障碍物轮廓点
     // 陡坡的采样点
     std::vector<PointStack> steep_boundary_clusters_;  // 每个元素是一个聚类的边界点
     std::vector<PointStack> steep_inner_clusters_;     // 每个元素是一个聚类的内部点
     PointCloudPtr steep_cloud_;
+    // 缓坡的采样点
+    std::vector<PointStack> moderate_boundary_clusters_;  // 每个元素是一个聚类的边界点
+    std::vector<PointStack> moderate_inner_clusters_;     // 每个元素是一个聚类的内部点
+    PointCloudPtr moderate_cloud_;
 
     tf::TransformListener* tf_listener_;
 

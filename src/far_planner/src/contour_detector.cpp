@@ -38,37 +38,6 @@ void ContourDetector::BuildTerrainImgAndExtractContour(
     this->ExtractContourFromImg(img_mat_, refined_contours_, realworl_contour);
 }
 
-void ContourDetector::ExtractContoursFromMask(
-    const cv::Mat& mask_img, const NavNodePtr& odom_node_ptr, std::vector<PointStack>& realworld_contour) {
-    if (mask_img.empty()) {
-        realworld_contour.clear();
-        return;
-    }
-
-    // 更新机器人位置
-    this->UpdateOdom(odom_node_ptr);
-
-    // 将输入的 mask 转换为合适的格式
-    cv::Mat img_for_contour;
-    if (mask_img.type() != CV_8UC1) {
-        mask_img.convertTo(img_for_contour, CV_8UC1);
-    } else {
-        img_for_contour = mask_img.clone();
-    }
-
-    // 缩放和模糊处理
-    cv::Mat Rimg;
-    this->ResizeAndBlurImg(img_for_contour, Rimg);
-
-    // 提取轮廓
-    std::vector<CVPointStack> img_contours;
-    this->ExtractRefinedContours(Rimg, img_contours);
-
-    // 转换为世界坐标
-    this->ConvertContoursToRealWorld(img_contours, realworld_contour);
-    ROS_INFO("poly size:%ld", realworld_contour.size());
-}
-
 void ContourDetector::UpdateImgMatWithCloud(const PointCloudPtr& pc, cv::Mat& img_mat) {
     int row_idx, col_idx, inf_row, inf_col;
     const std::vector<int> inflate_vec{-1, 0, 1};
@@ -290,16 +259,126 @@ void ContourDetector::ExtractSteepSlopePoints(const PointCloudPtr& steep_cloud, 
     ROS_INFO("CD: Total clusters: %lu", boundary_clusters.size());
 }
 
-// ============================================================
-// 辅助函数: 提取边界点(凹包采样)
-// ============================================================
-void ContourDetector::ExtractBoundaryPoints(const PointCloudPtr& cluster, PointStack& boundary_points) {
-    // 函数体保持不变，只是参数类型从 std::vector<Point3D>& 改为 PointStack&
-    boundary_points.clear();
+// void ContourDetector::ExtractBoundaryPoints(const PointCloudPtr& cluster, PointStack& boundary_points) {
+//     boundary_points.clear();
+//     if (cluster->size() < 3) return;
 
-    if (cluster->size() < 3) {
-        return;
-    }
+//     // 投影到xy平面
+//     PointCloudPtr cloud_2d(new pcl::PointCloud<PCLPoint>());
+//     for (const auto& p : cluster->points) {
+//         PCLPoint p2d = p;
+//         p2d.z = 0.0f;
+//         cloud_2d->push_back(p2d);
+//     }
+
+//     // 提取凹包
+//     pcl::PointCloud<PCLPoint>::Ptr hull_points(new pcl::PointCloud<PCLPoint>());
+//     pcl::ConcaveHull<PCLPoint> hull;
+//     hull.setInputCloud(cloud_2d);
+//     hull.setDimension(2);
+//     hull.setAlpha(cd_params_.steep_concave_alpha);
+//     hull.reconstruct(*hull_points);
+
+//     if (hull_points->size() < 3) {
+//         pcl::ConvexHull<PCLPoint> convex_hull;
+//         convex_hull.setInputCloud(cloud_2d);
+//         convex_hull.setDimension(2);
+//         convex_hull.reconstruct(*hull_points);
+//         if (hull_points->size() < 3) return;
+//     }
+
+//     // 平滑处理
+//     std::vector<PCLPoint> smoothed_hull;
+//     const int smooth_window = cd_params_.steep_smooth_window;
+//     for (size_t i = 0; i < hull_points->size(); i++) {
+//         PCLPoint avg_p;
+//         avg_p.x = 0.0f;
+//         avg_p.y = 0.0f;
+//         avg_p.z = 0.0f;
+
+//         int count = 0;
+//         for (int offset = -smooth_window; offset <= smooth_window; offset++) {
+//             int idx = (i + offset + hull_points->size()) % hull_points->size();
+//             avg_p.x += hull_points->points[idx].x;
+//             avg_p.y += hull_points->points[idx].y;
+//             count++;
+//         }
+//         avg_p.x /= count;
+//         avg_p.y /= count;
+//         smoothed_hull.push_back(avg_p);
+//     }
+
+//     // [改进] 栅格约束的周长采样
+//     const float grid_size = cd_params_.steep_boundary_sample_dist;
+//     const float sample_dist = grid_size * 0.8f;  // 比栅格稍小,确保覆盖
+
+//     // 计算总周长
+//     float total_perimeter = 0.0f;
+//     std::vector<float> edge_lengths;
+//     for (size_t i = 0; i < smoothed_hull.size(); i++) {
+//         PCLPoint p1 = smoothed_hull[i];
+//         PCLPoint p2 = smoothed_hull[(i + 1) % smoothed_hull.size()];
+//         float edge_len = std::hypotf(p2.x - p1.x, p2.y - p1.y);
+//         edge_lengths.push_back(edge_len);
+//         total_perimeter += edge_len;
+//     }
+
+//     int total_samples = std::max(3, (int)(total_perimeter / sample_dist));
+//     float actual_sample_dist = total_perimeter / total_samples;
+
+//     // [关键改进] 使用栅格去重,但采样点在轮廓线上
+//     std::set<std::pair<int, int>> sampled_grids;
+
+//     pcl::KdTreeFLANN<PCLPoint> kdtree;
+//     kdtree.setInputCloud(cluster);
+
+//     float accumulated_length = 0.0f;
+//     float next_sample_dist = 0.0f;
+
+//     for (size_t i = 0; i < smoothed_hull.size(); i++) {
+//         PCLPoint p1 = smoothed_hull[i];
+//         PCLPoint p2 = smoothed_hull[(i + 1) % smoothed_hull.size()];
+//         float edge_len = edge_lengths[i];
+
+//         float edge_start = accumulated_length;
+//         float edge_end = accumulated_length + edge_len;
+
+//         while (next_sample_dist < edge_end) {
+//             float t = (next_sample_dist - edge_start) / edge_len;
+//             PCLPoint sample_p;
+//             sample_p.x = p1.x + t * (p2.x - p1.x);
+//             sample_p.y = p1.y + t * (p2.y - p1.y);
+//             sample_p.z = 0.0f;
+
+//             // 计算所属栅格
+//             int gx = (int)std::round(sample_p.x / grid_size);
+//             int gy = (int)std::round(sample_p.y / grid_size);
+
+//             // 跳过已采样的栅格
+//             if (!sampled_grids.count({gx, gy})) {
+//                 sampled_grids.insert({gx, gy});
+
+//                 // [关键] 采样点就在轮廓线上,不对齐到栅格中心
+//                 std::vector<int> idx(1);
+//                 std::vector<float> dist(1);
+
+//                 if (kdtree.nearestKSearch(sample_p, 1, idx, dist) > 0) {
+//                     const PCLPoint& nearest_p = cluster->points[idx[0]];
+//                     boundary_points.push_back(Point3D(nearest_p.x, nearest_p.y, nearest_p.z));
+//                 }
+//             }
+
+//             next_sample_dist += actual_sample_dist;
+//         }
+
+//         accumulated_length += edge_len;
+//     }
+
+//     ROS_INFO("CD: Steep boundary sampling: %lu points (grid-constrained)", boundary_points.size());
+// }
+void ContourDetector::ExtractBoundaryPoints(const PointCloudPtr& cluster, PointStack& boundary_points) {
+    boundary_points.clear();
+    if (cluster->size() < 3) return;
 
     // 投影到xy平面
     PointCloudPtr cloud_2d(new pcl::PointCloud<PCLPoint>());
@@ -309,30 +388,32 @@ void ContourDetector::ExtractBoundaryPoints(const PointCloudPtr& cluster, PointS
         cloud_2d->push_back(p2d);
     }
 
-    // [改进1] 使用凹包（ConcaveHull）替代凸包，能处理凹进去的边界
+    // [改进1] 先尝试凹包,失败则用凸包
     pcl::PointCloud<PCLPoint>::Ptr hull_points(new pcl::PointCloud<PCLPoint>());
-    pcl::ConcaveHull<PCLPoint> hull;
-    hull.setInputCloud(cloud_2d);
-    hull.setDimension(2);
-    hull.setAlpha(cd_params_.steep_concave_alpha);  // alpha值控制凹包的"凹陷程度"，值越小越贴合原始形状
-    hull.reconstruct(*hull_points);
+    bool is_concave = true;
 
-    if (hull_points->size() < 3) {
-        ROS_WARN("CD: Concave hull has less than 3 points, fallback to convex hull");
-        // 如果凹包失败，回退到凸包
+    pcl::ConcaveHull<PCLPoint> concave_hull;
+    concave_hull.setInputCloud(cloud_2d);
+    concave_hull.setDimension(2);
+    concave_hull.setAlpha(cd_params_.steep_concave_alpha);
+    concave_hull.reconstruct(*hull_points);
+
+    // 凹包失败检测:点数太少或退化
+    if (hull_points->size() < 3 || hull_points->size() < cloud_2d->size() * 0.3) {
+        ROS_WARN("CD: Concave hull failed/degenerated, using convex hull");
+        hull_points->clear();
         pcl::ConvexHull<PCLPoint> convex_hull;
         convex_hull.setInputCloud(cloud_2d);
         convex_hull.setDimension(2);
         convex_hull.reconstruct(*hull_points);
+        is_concave = false;
 
-        if (hull_points->size() < 3) {
-            return;
-        }
+        if (hull_points->size() < 3) return;
     }
 
-    // [改进2] 对凹包边界进行平滑处理（移动平均滤波）
+    // 平滑处理
     std::vector<PCLPoint> smoothed_hull;
-    const int smooth_window = cd_params_.steep_smooth_window;  // 平滑窗口大小
+    const int smooth_window = cd_params_.steep_smooth_window;
     for (size_t i = 0; i < hull_points->size(); i++) {
         PCLPoint avg_p;
         avg_p.x = 0.0f;
@@ -346,73 +427,189 @@ void ContourDetector::ExtractBoundaryPoints(const PointCloudPtr& cluster, PointS
             avg_p.y += hull_points->points[idx].y;
             count++;
         }
-
         avg_p.x /= count;
         avg_p.y /= count;
         smoothed_hull.push_back(avg_p);
     }
 
-    // [改进] 按周长均匀采样，而不是按边采样
-    const float sample_dist = cd_params_.steep_boundary_sample_dist;
+    // ========================================================
+    // [核心改进] 两阶段采样: 先固定拐点,再插值采样
+    // ========================================================
+    const float grid_size = cd_params_.steep_boundary_sample_dist;
+    const float angle_threshold = cd_params_.steep_corner_angle_threshold;  // 拐点角度阈值(度)
+    const float angle_threshold_rad = angle_threshold * M_PI / 180.0f;
 
-    // 计算总周长
-    float total_perimeter = 0.0f;
-    std::vector<float> edge_lengths;
+    // 阶段1: 检测并固定拐点
+    struct CornerPoint {
+        size_t index;              // 在轮廓中的索引
+        PCLPoint position;         // 原始位置
+        std::pair<int, int> grid;  // 对齐的栅格坐标
+    };
+
+    std::vector<CornerPoint> corner_points;
+    std::set<std::pair<int, int>> used_grids;
+
     for (size_t i = 0; i < smoothed_hull.size(); i++) {
-        PCLPoint p1 = smoothed_hull[i];
-        PCLPoint p2 = smoothed_hull[(i + 1) % smoothed_hull.size()];
-        float edge_len = std::hypotf(p2.x - p1.x, p2.y - p1.y);
-        edge_lengths.push_back(edge_len);
-        total_perimeter += edge_len;
+        PCLPoint p_prev = smoothed_hull[(i - 1 + smoothed_hull.size()) % smoothed_hull.size()];
+        PCLPoint p_curr = smoothed_hull[i];
+        PCLPoint p_next = smoothed_hull[(i + 1) % smoothed_hull.size()];
+
+        // 计算两条边的向量
+        float v1_x = p_curr.x - p_prev.x;
+        float v1_y = p_curr.y - p_prev.y;
+        float v2_x = p_next.x - p_curr.x;
+        float v2_y = p_next.y - p_curr.y;
+
+        float len1 = std::hypotf(v1_x, v1_y);
+        float len2 = std::hypotf(v2_x, v2_y);
+
+        if (len1 < 1e-6 || len2 < 1e-6) continue;
+
+        // 归一化并计算夹角
+        v1_x /= len1;
+        v1_y /= len1;
+        v2_x /= len2;
+        v2_y /= len2;
+
+        float dot = v1_x * v2_x + v1_y * v2_y;
+        float angle = std::acos(std::max(-1.0f, std::min(1.0f, dot)));
+
+        // [关键判断] 是否为拐点
+        if (angle > angle_threshold_rad) {
+            int gx = (int)std::round(p_curr.x / grid_size);
+            int gy = (int)std::round(p_curr.y / grid_size);
+
+            // 避免拐点在同一栅格(优先保留角度更大的)
+            if (!used_grids.count({gx, gy})) {
+                corner_points.push_back({i, p_curr, {gx, gy}});
+                used_grids.insert({gx, gy});
+            }
+        }
     }
 
-    // 计算需要的总采样点数
-    int total_samples = std::max(3, (int)(total_perimeter / sample_dist));
-    float actual_sample_dist = total_perimeter / total_samples;
+    ROS_INFO("CD: Detected %lu corner points (angle > %.1f deg)", corner_points.size(), angle_threshold);
 
-    ROS_INFO("CD: Perimeter=%.2fm, target samples=%d, actual dist=%.2fm", total_perimeter, total_samples,
-        actual_sample_dist);
-
-    // 沿周长均匀采样
-    float accumulated_length = 0.0f;
-    float next_sample_dist = 0.0f;
-
-    // [修复] 把 KdTree 构建移到循环外面
+    // 阶段2: 在相邻拐点之间插值采样
     pcl::KdTreeFLANN<PCLPoint> kdtree;
-    kdtree.setInputCloud(cluster);  // 只构建一次
+    kdtree.setInputCloud(cluster);
 
-    for (size_t i = 0; i < smoothed_hull.size(); i++) {
-        PCLPoint p1 = smoothed_hull[i];
-        PCLPoint p2 = smoothed_hull[(i + 1) % smoothed_hull.size()];
-        float edge_len = edge_lengths[i];
+    // 如果没有拐点,退化为全周长均匀采样
+    if (corner_points.empty()) {
+        ROS_WARN("CD: No corners detected, fallback to uniform sampling");
 
-        float edge_start = accumulated_length;
-        float edge_end = accumulated_length + edge_len;
-
-        // 在当前边上采样
-        while (next_sample_dist < edge_end) {
-            float t = (next_sample_dist - edge_start) / edge_len;
-            PCLPoint sample_p;
-            sample_p.x = p1.x + t * (p2.x - p1.x);
-            sample_p.y = p1.y + t * (p2.y - p1.y);
-            sample_p.z = 0.0f;
-
-            // 找原始点云中最近的点(恢复z值)
-            std::vector<int> idx(1);
-            std::vector<float> dist(1);
-
-            if (kdtree.nearestKSearch(sample_p, 1, idx, dist) > 0) {
-                const PCLPoint& nearest_p = cluster->points[idx[0]];
-                boundary_points.push_back(Point3D(nearest_p.x, nearest_p.y, nearest_p.z));
-            }
-
-            next_sample_dist += actual_sample_dist;
+        float total_perimeter = 0.0f;
+        for (size_t i = 0; i < smoothed_hull.size(); i++) {
+            PCLPoint p1 = smoothed_hull[i];
+            PCLPoint p2 = smoothed_hull[(i + 1) % smoothed_hull.size()];
+            total_perimeter += std::hypotf(p2.x - p1.x, p2.y - p1.y);
         }
 
-        accumulated_length += edge_len;
-    }
-}
+        int total_samples = std::max(3, (int)(total_perimeter / grid_size));
+        float actual_sample_dist = total_perimeter / total_samples;
 
+        float accumulated = 0.0f, next_sample = 0.0f;
+        for (size_t i = 0; i < smoothed_hull.size(); i++) {
+            PCLPoint p1 = smoothed_hull[i];
+            PCLPoint p2 = smoothed_hull[(i + 1) % smoothed_hull.size()];
+            float edge_len = std::hypotf(p2.x - p1.x, p2.y - p1.y);
+
+            while (next_sample < accumulated + edge_len) {
+                float t = (next_sample - accumulated) / edge_len;
+                PCLPoint sample_p;
+                sample_p.x = p1.x + t * (p2.x - p1.x);
+                sample_p.y = p1.y + t * (p2.y - p1.y);
+                sample_p.z = 0.0f;
+
+                std::vector<int> idx(1);
+                std::vector<float> dist(1);
+                if (kdtree.nearestKSearch(sample_p, 1, idx, dist) > 0) {
+                    boundary_points.push_back(
+                        Point3D(cluster->points[idx[0]].x, cluster->points[idx[0]].y, cluster->points[idx[0]].z));
+                }
+                next_sample += actual_sample_dist;
+            }
+            accumulated += edge_len;
+        }
+
+        ROS_INFO("CD: Steep boundary: %lu points (uniform)", boundary_points.size());
+        return;
+    }
+
+    // 有拐点: 先添加所有拐点,再插值
+    for (const auto& corner : corner_points) {
+        std::vector<int> idx(1);
+        std::vector<float> dist(1);
+        if (kdtree.nearestKSearch(corner.position, 1, idx, dist) > 0) {
+            boundary_points.push_back(
+                Point3D(cluster->points[idx[0]].x, cluster->points[idx[0]].y, cluster->points[idx[0]].z));
+        }
+    }
+
+    // 在相邻拐点之间插值采样
+    for (size_t ci = 0; ci < corner_points.size(); ci++) {
+        size_t start_idx = corner_points[ci].index;
+        size_t end_idx = corner_points[(ci + 1) % corner_points.size()].index;
+
+        // 计算拐点之间的弧长
+        float arc_length = 0.0f;
+        size_t current = start_idx;
+        while (current != end_idx) {
+            size_t next = (current + 1) % smoothed_hull.size();
+            PCLPoint p1 = smoothed_hull[current];
+            PCLPoint p2 = smoothed_hull[next];
+            arc_length += std::hypotf(p2.x - p1.x, p2.y - p1.y);
+            current = next;
+        }
+
+        // 在拐点之间插值
+        int num_samples = std::max(0, (int)(arc_length / grid_size) - 1);  // 减1避免重复拐点
+
+        if (num_samples > 0) {
+            float sample_interval = arc_length / (num_samples + 1);
+            float accumulated = 0.0f;
+            float next_sample = sample_interval;
+
+            current = start_idx;
+            while (current != end_idx) {
+                size_t next = (current + 1) % smoothed_hull.size();
+                PCLPoint p1 = smoothed_hull[current];
+                PCLPoint p2 = smoothed_hull[next];
+                float edge_len = std::hypotf(p2.x - p1.x, p2.y - p1.y);
+
+                while (next_sample < accumulated + edge_len && next_sample < arc_length) {
+                    float t = (next_sample - accumulated) / edge_len;
+                    PCLPoint sample_p;
+                    sample_p.x = p1.x + t * (p2.x - p1.x);
+                    sample_p.y = p1.y + t * (p2.y - p1.y);
+                    sample_p.z = 0.0f;
+
+                    // 栅格去重
+                    int gx = (int)std::round(sample_p.x / grid_size);
+                    int gy = (int)std::round(sample_p.y / grid_size);
+
+                    if (!used_grids.count({gx, gy})) {
+                        used_grids.insert({gx, gy});
+
+                        std::vector<int> idx(1);
+                        std::vector<float> dist(1);
+                        if (kdtree.nearestKSearch(sample_p, 1, idx, dist) > 0) {
+                            boundary_points.push_back(Point3D(
+                                cluster->points[idx[0]].x, cluster->points[idx[0]].y, cluster->points[idx[0]].z));
+                        }
+                    }
+
+                    next_sample += sample_interval;
+                }
+
+                accumulated += edge_len;
+                current = next;
+            }
+        }
+    }
+
+    ROS_INFO("CD: Steep boundary: %lu points (%lu corners + interpolation, %s hull)", boundary_points.size(),
+        corner_points.size(), is_concave ? "concave" : "convex");
+}
 // ============================================================
 // 辅助函数: 提取内部点(体素滤波)
 // ============================================================
@@ -432,4 +629,333 @@ void ContourDetector::ExtractInnerPoints(PointCloudPtr& cluster, PointStack& inn
     for (const auto& p : cluster->points) {
         inner_points.push_back(Point3D(p.x, p.y, p.z));
     }
+}
+
+// ============================================================
+// [新增] 缓坡提取主函数
+// ============================================================
+void ContourDetector::ExtractModerateSlopePoints(const PointCloudPtr& moderate_cloud, const NavNodePtr& odom_node_ptr,
+    std::vector<PointStack>& boundary_clusters, std::vector<PointStack>& inner_clusters) {
+    boundary_clusters.clear();
+    inner_clusters.clear();
+
+    if (moderate_cloud->empty()) {
+        ROS_WARN("CD: Input moderate cloud is empty");
+        return;
+    }
+
+    // ============================================================
+    // 步骤 1: 裁剪点云
+    // ============================================================
+    PointCloudPtr cropped_cloud(new pcl::PointCloud<PCLPoint>());
+    const float crop_radius = cd_params_.moderate_crop_radius;
+
+    for (const auto& p : moderate_cloud->points) {
+        float dist_xy = std::hypotf(p.x - odom_pos_.x, p.y - odom_pos_.y);
+        if (dist_xy <= crop_radius) {
+            cropped_cloud->push_back(p);
+        }
+    }
+
+    if (cropped_cloud->empty()) {
+        ROS_WARN("CD: No moderate points within crop radius %.1fm", crop_radius);
+        return;
+    }
+
+    ROS_INFO("CD: Cropped %lu moderate points within %.1fm", cropped_cloud->size(), crop_radius);
+
+    // ============================================================
+    // 步骤 2: 欧式聚类
+    // ============================================================
+    std::vector<pcl::PointIndices> cluster_indices;
+    pcl::search::KdTree<PCLPoint>::Ptr tree(new pcl::search::KdTree<PCLPoint>);
+    tree->setInputCloud(cropped_cloud);
+
+    pcl::EuclideanClusterExtraction<PCLPoint> ec;
+    ec.setClusterTolerance(cd_params_.moderate_cluster_tolerance);
+    ec.setMinClusterSize(cd_params_.moderate_min_cluster_size);
+    ec.setMaxClusterSize(cd_params_.moderate_max_cluster_size);
+    ec.setSearchMethod(tree);
+    ec.setInputCloud(cropped_cloud);
+    ec.extract(cluster_indices);
+
+    if (cluster_indices.empty()) {
+        ROS_WARN("CD: No valid moderate clusters found");
+        return;
+    }
+
+    ROS_INFO("CD: Found %lu moderate slope clusters", cluster_indices.size());
+
+    // 预分配空间
+    boundary_clusters.resize(cluster_indices.size());
+    inner_clusters.resize(cluster_indices.size());
+
+    // ============================================================
+    // 步骤 3: 对每个聚类提取边界点和内部点
+    // ============================================================
+    for (size_t i = 0; i < cluster_indices.size(); i++) {
+        // 提取当前聚类
+        PointCloudPtr cluster(new pcl::PointCloud<PCLPoint>());
+        for (int idx : cluster_indices[i].indices) {
+            cluster->push_back((*cropped_cloud)[idx]);
+        }
+
+        ROS_INFO("CD: Processing moderate cluster %lu with %lu points", i, cluster->size());
+
+        // 提取边界点和内部点
+        // ExtractModerateBoundaryPoints(cluster, boundary_clusters[i]);
+        ExtractModerateInnerPoints(cluster, inner_clusters[i]);
+        boundary_clusters.clear();
+
+        ROS_INFO("CD: Moderate cluster %lu - boundary: %lu, inner: %lu", i, boundary_clusters[i].size(),
+            inner_clusters[i].size());
+    }
+
+    ROS_INFO("CD: Total moderate clusters: %lu", boundary_clusters.size());
+}
+
+// ============================================================
+// [新增] 辅助函数: 提取缓坡边界点(凹包采样)
+// ============================================================
+void ContourDetector::ExtractModerateBoundaryPoints(const PointCloudPtr& cluster, PointStack& boundary_points) {
+    boundary_points.clear();
+
+    if (cluster->size() < 3) {
+        return;
+    }
+
+    // 投影到xy平面
+    PointCloudPtr cloud_2d(new pcl::PointCloud<PCLPoint>());
+    for (const auto& p : cluster->points) {
+        PCLPoint p2d = p;
+        p2d.z = 0.0f;
+        cloud_2d->push_back(p2d);
+    }
+
+    // 使用凹包提取边界（alpha值更大，能提取圆环内圈）
+    pcl::PointCloud<PCLPoint>::Ptr hull_points(new pcl::PointCloud<PCLPoint>());
+    pcl::ConcaveHull<PCLPoint> hull;
+    hull.setInputCloud(cloud_2d);
+    hull.setDimension(2);
+    hull.setAlpha(cd_params_.moderate_concave_alpha);
+    hull.reconstruct(*hull_points);
+
+    if (hull_points->size() < 3) {
+        ROS_WARN("CD: Moderate concave hull failed, fallback to convex hull");
+        pcl::ConvexHull<PCLPoint> convex_hull;
+        convex_hull.setInputCloud(cloud_2d);
+        convex_hull.setDimension(2);
+        convex_hull.reconstruct(*hull_points);
+
+        if (hull_points->size() < 3) {
+            return;
+        }
+    }
+
+    // 平滑处理
+    std::vector<PCLPoint> smoothed_hull;
+    const int smooth_window = cd_params_.moderate_smooth_window;
+    for (size_t i = 0; i < hull_points->size(); i++) {
+        PCLPoint avg_p;
+        avg_p.x = 0.0f;
+        avg_p.y = 0.0f;
+        avg_p.z = 0.0f;
+
+        int count = 0;
+        for (int offset = -smooth_window; offset <= smooth_window; offset++) {
+            int idx = (i + offset + hull_points->size()) % hull_points->size();
+            avg_p.x += hull_points->points[idx].x;
+            avg_p.y += hull_points->points[idx].y;
+            count++;
+        }
+
+        avg_p.x /= count;
+        avg_p.y /= count;
+        smoothed_hull.push_back(avg_p);
+    }
+
+    // 按周长均匀采样（更稀疏）
+    const float sample_dist = cd_params_.moderate_boundary_sample_dist;
+
+    // 计算总周长
+    float total_perimeter = 0.0f;
+    std::vector<float> edge_lengths;
+    for (size_t i = 0; i < smoothed_hull.size(); i++) {
+        PCLPoint p1 = smoothed_hull[i];
+        PCLPoint p2 = smoothed_hull[(i + 1) % smoothed_hull.size()];
+        float edge_len = std::hypotf(p2.x - p1.x, p2.y - p1.y);
+        edge_lengths.push_back(edge_len);
+        total_perimeter += edge_len;
+    }
+
+    int total_samples = std::max(3, (int)(total_perimeter / sample_dist));
+    float actual_sample_dist = total_perimeter / total_samples;
+
+    ROS_INFO(
+        "CD: Moderate perimeter=%.2fm, samples=%d, dist=%.2fm", total_perimeter, total_samples, actual_sample_dist);
+
+    // 沿周长采样
+    float accumulated_length = 0.0f;
+    float next_sample_dist = 0.0f;
+
+    pcl::KdTreeFLANN<PCLPoint> kdtree;
+    kdtree.setInputCloud(cluster);
+
+    for (size_t i = 0; i < smoothed_hull.size(); i++) {
+        PCLPoint p1 = smoothed_hull[i];
+        PCLPoint p2 = smoothed_hull[(i + 1) % smoothed_hull.size()];
+        float edge_len = edge_lengths[i];
+
+        float edge_start = accumulated_length;
+        float edge_end = accumulated_length + edge_len;
+
+        while (next_sample_dist < edge_end) {
+            float t = (next_sample_dist - edge_start) / edge_len;
+            PCLPoint sample_p;
+            sample_p.x = p1.x + t * (p2.x - p1.x);
+            sample_p.y = p1.y + t * (p2.y - p1.y);
+            sample_p.z = 0.0f;
+
+            std::vector<int> idx(1);
+            std::vector<float> dist(1);
+
+            if (kdtree.nearestKSearch(sample_p, 1, idx, dist) > 0) {
+                const PCLPoint& nearest_p = cluster->points[idx[0]];
+                boundary_points.push_back(Point3D(nearest_p.x, nearest_p.y, nearest_p.z));
+            }
+
+            next_sample_dist += actual_sample_dist;
+        }
+
+        accumulated_length += edge_len;
+    }
+}
+
+// [新增] 辅助函数: 沿轮廓均匀采样
+void ContourDetector::SampleContourUniformly(const std::vector<PCLPoint>& contour, pcl::KdTreeFLANN<PCLPoint>& kdtree,
+    const PointCloudPtr& cluster, PointStack& sampled_points, float sample_dist) {
+    // 计算周长
+    float total_perimeter = 0.0f;
+    std::vector<float> edge_lengths;
+    for (size_t i = 0; i < contour.size(); i++) {
+        PCLPoint p1 = contour[i];
+        PCLPoint p2 = contour[(i + 1) % contour.size()];
+        float edge_len = std::hypotf(p2.x - p1.x, p2.y - p1.y);
+        edge_lengths.push_back(edge_len);
+        total_perimeter += edge_len;
+    }
+
+    int total_samples = std::max(3, (int)(total_perimeter / sample_dist));
+    float actual_sample_dist = total_perimeter / total_samples;
+
+    // 沿周长采样
+    float accumulated_length = 0.0f;
+    float next_sample_dist = 0.0f;
+
+    for (size_t i = 0; i < contour.size(); i++) {
+        PCLPoint p1 = contour[i];
+        PCLPoint p2 = contour[(i + 1) % contour.size()];
+        float edge_len = edge_lengths[i];
+
+        float edge_start = accumulated_length;
+        float edge_end = accumulated_length + edge_len;
+
+        while (next_sample_dist < edge_end) {
+            float t = (next_sample_dist - edge_start) / edge_len;
+            PCLPoint sample_p;
+            sample_p.x = p1.x + t * (p2.x - p1.x);
+            sample_p.y = p1.y + t * (p2.y - p1.y);
+            sample_p.z = 0.0f;
+
+            std::vector<int> idx(1);
+            std::vector<float> dist(1);
+
+            if (kdtree.nearestKSearch(sample_p, 1, idx, dist) > 0) {
+                const PCLPoint& nearest_p = cluster->points[idx[0]];
+                sampled_points.push_back(Point3D(nearest_p.x, nearest_p.y, nearest_p.z));
+            }
+
+            next_sample_dist += actual_sample_dist;
+        }
+
+        accumulated_length += edge_len;
+    }
+}
+
+// ============================================================
+// [新增] 辅助函数: 提取缓坡内部点(体素滤波，更稀疏)
+// ============================================================
+
+// void ContourDetector::ExtractModerateInnerPoints(PointCloudPtr& cluster, PointStack& inner_points) {
+//     inner_points.clear();
+
+//     if (cluster->size() < 5) {
+//         return;
+//     }
+//     // 使用体素滤波进行稀疏采样
+//     float voxel_size = cd_params_.moderate_inner_voxel_size;
+//     FARUtil::FilterCloud(cluster, voxel_size);
+
+//     // 转换为 Point3D
+//     for (const auto& p : cluster->points) {
+//         inner_points.push_back(Point3D(p.x, p.y, p.z));
+//     }
+// }
+
+void ContourDetector::ExtractModerateInnerPoints(PointCloudPtr& cluster, PointStack& inner_points) {
+    inner_points.clear();
+
+    if (cluster->size() < 5) {
+        return;
+    }
+
+    // [改进1] 对齐到整数坐标网格
+    const float grid_size = cd_params_.moderate_inner_voxel_size;  // 例如 4.0m
+    const float crop_radius = cd_params_.moderate_crop_radius;
+
+    // 使用map去重,key是整数坐标
+    std::map<std::pair<int, int>, std::vector<PCLPoint>> grid_map;
+
+    for (const auto& p : cluster->points) {
+        // 检查范围
+        float dist_xy = std::hypotf(p.x - odom_pos_.x, p.y - odom_pos_.y);
+        if (dist_xy > crop_radius) {
+            continue;
+        }
+
+        // [关键] 对齐到最近的整数坐标(单位是grid_size)
+        int gx = (int)std::round(p.x / grid_size);
+        int gy = (int)std::round(p.y / grid_size);
+
+        grid_map[{gx, gy}].push_back(p);
+    }
+
+    // [改进2] 对每个网格,找离整数坐标最近的点
+    for (const auto& [grid_key, points] : grid_map) {
+        if (points.empty()) continue;
+
+        // 整数坐标位置(世界坐标系)
+        float target_x = grid_key.first * grid_size;
+        float target_y = grid_key.second * grid_size;
+
+        // 找距离目标位置最近的点
+        float min_dist = std::numeric_limits<float>::max();
+        PCLPoint best_point;
+
+        for (const auto& p : points) {
+            float dx = p.x - target_x;
+            float dy = p.y - target_y;
+            float dist_sq = dx * dx + dy * dy;
+
+            if (dist_sq < min_dist) {
+                min_dist = dist_sq;
+                best_point = p;
+            }
+        }
+
+        // 添加最优点(使用其真实xyz坐标)
+        inner_points.push_back(Point3D(best_point.x, best_point.y, best_point.z));
+    }
+
+    // ROS_INFO("CD: Moderate inner points: %lu unique grids (aligned to integers)", inner_points.size());
 }
