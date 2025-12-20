@@ -912,7 +912,7 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
                 is_steep = (slope_val > SLOPE_HIGH);
             }
 
-            if (is_steep) {
+            if (is_steep && (dilated_step_risk.at<uchar>(r, c) < 100)) {
                 steep_slope_mask_.at<uchar>(r, c) = 255;
                 continue;
             }
