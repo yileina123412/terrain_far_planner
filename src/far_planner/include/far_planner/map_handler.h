@@ -144,7 +144,7 @@ public:
 
     void GridToImg(cv::Mat& height_img, cv::Mat& var_img, cv::Mat& mask_img);
 
-    void ComputeTerrainRiskAttributes();
+    void ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeightOut);
 
     void PublishRiskMapViz();
 
@@ -237,6 +237,7 @@ private:
     PointCloudPtr flat_terrain_cloud_;
     static PointKdTreePtr kdtree_terrain_clould_;
     // 上帝视角的二值化风险地图
+    bool occlusion_boundary_ready = false;
     bool risk_map_ready_ = false;
     Point3D initial_robot_pos_;
 
@@ -279,7 +280,6 @@ private:
 
     void SetTerrainHeightGridOrigin(const Point3D& robot_pos);
 
-    void TraversableAnalysis(const PointCloudPtr& terrainHeightOut);
     //
     inline void AssignFlatTerrainCloud(const PointCloudPtr& terrainRef, PointCloudPtr& terrainFlatOut) {
         const int N = terrainRef->size();

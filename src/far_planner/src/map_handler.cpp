@@ -72,6 +72,7 @@ void MapHandler::Init(const MapHandlerParams& params) {
 
     // 风险评估
     risk_map_ready_ = false;
+    occlusion_boundary_ready = false;
     initial_robot_pos_ = Point3D(0, 0, 0);  // 会在第一次更新时设置
 
     // [新增] 初始化五类地形点云
@@ -450,8 +451,8 @@ void MapHandler::UpdateTerrainHeightGrid(const PointCloudPtr& freeCloudIn, const
     }
     const int N = terrain_grid_occupy_list_.size();
     CalculateAveHigh();
-    ComputeTerrainRiskAttributes();
-    this->TraversableAnalysis(terrainHeightOut);
+    ComputeTerrainRiskAttributes(terrainHeightOut);
+    // 判断terrain_grid_traverse_list_
     terrainHeightOut->header.frame_id = FARUtil::worldFrameId;  // 设置为世界坐标系
     terrainHeightOut->header.stamp = pcl_conversions::toPCL(ros::Time::now());
     if (terrainHeightOut->empty()) {  // set terrain height kdtree
@@ -464,7 +465,6 @@ void MapHandler::UpdateTerrainHeightGrid(const PointCloudPtr& freeCloudIn, const
     this->ObsNeighborCloudWithTerrain(neighbor_obs_indices_, extend_obs_indices_);
 }
 
-// 计算terrain_height_grid_中的平均高度
 void MapHandler::CalculateAveHigh() {
     const Eigen::Vector3i robot_sub =
         terrain_height_grid_->Pos2Sub(Eigen::Vector3d(FARUtil::robot_pos.x, FARUtil::robot_pos.y, 0.0f));
@@ -481,15 +481,16 @@ void MapHandler::CalculateAveHigh() {
         const auto& height_vec = terrain_height_grid_->GetCell(i);
         if (height_vec.size() < 1) continue;
 
-        // 计算该网格中所有高度的平均值
+        // 使用中位数替代平均值，抗离群点噪声
         float avg_height = 0.0f;
-        for (int i = 1; i < height_vec.size(); i++) {
-            avg_height += height_vec[i];
+        if (height_vec.size() == 1) {
+            avg_height = height_vec[0];
+        } else {
+            // 复制数据用于排序（不修改原始 grid）
+            std::vector<float> heights_copy(height_vec.begin(), height_vec.end());
+            std::nth_element(heights_copy.begin(), heights_copy.begin() + heights_copy.size() / 2, heights_copy.end());
+            avg_height = heights_copy[heights_copy.size() / 2];
         }
-        // for (const float& height : height_vec) {
-        //     avg_height += height;
-        // }
-        avg_height /= height_vec.size() - 1;
 
         // 获取网格的3D位置
         Eigen::Vector3d grid_pos = terrain_height_grid_->Ind2Pos(i);
@@ -509,88 +510,6 @@ void MapHandler::CalculateAveHigh() {
     ave_high_terrain_cloud_->is_dense = false;
     ave_high_terrain_cloud_->header.frame_id = FARUtil::worldFrameId;
     ave_high_terrain_cloud_->header.stamp = pcl_conversions::toPCL(ros::Time::now());
-}
-
-void MapHandler::TraversableAnalysis(const PointCloudPtr& terrainHeightOut) {
-    const Eigen::Vector3i robot_sub =
-        terrain_height_grid_->Pos2Sub(Eigen::Vector3d(FARUtil::robot_pos.x, FARUtil::robot_pos.y, 0.0f));
-    terrainHeightOut->clear();
-    if (!terrain_height_grid_->InRange(robot_sub)) {
-        ROS_ERROR("MH: terrain height analysis error: robot position is not in range");
-        return;
-    }
-    const float H_THRED = map_params_.height_voxel_dim;
-    std::fill(terrain_grid_traverse_list_.begin(), terrain_grid_traverse_list_.end(), 0);
-    // Lambda Function
-    auto IsTraversableNeighbor = [&](const int& cur_id, const int& ref_id) {
-        if (terrain_grid_occupy_list_[ref_id] == 0) return false;
-        const float cur_h = terrain_height_grid_->GetCell(cur_id)[0];
-        float ref_h = 0.0f;
-        int counter = 0;
-        for (const auto& e : terrain_height_grid_->GetCell(ref_id)) {
-            if (abs(e - cur_h) > H_THRED) continue;
-            ref_h += e, counter++;
-        }
-        if (counter > 0) {
-            terrain_height_grid_->GetCell(ref_id).resize(1);
-            terrain_height_grid_->GetCell(ref_id)[0] = ref_h / (float)counter;
-            return true;
-        }
-        return false;
-    };
-
-    auto AddTraversePoint = [&](const int& idx) {
-        Eigen::Vector3d cpos = terrain_height_grid_->Ind2Pos(idx);
-        cpos.z() = terrain_height_grid_->GetCell(idx)[0];
-        const PCLPoint p = FARUtil::Point3DToPCLPoint(Point3D(cpos));
-        terrainHeightOut->points.push_back(p);
-        terrain_grid_traverse_list_[idx] = 1;
-    };
-
-    const int robot_idx = terrain_height_grid_->Sub2Ind(robot_sub);
-    const std::array<int, 4> dx = {-1, 0, 1, 0};
-    const std::array<int, 4> dy = {0, 1, 0, -1};
-    std::deque<int> q;
-    bool is_robot_terrain_init = false;
-    std::unordered_set<int> visited_set;
-    q.push_back(robot_idx), visited_set.insert(robot_idx);
-    while (!q.empty()) {
-        const int cur_id = q.front();
-        q.pop_front();
-        if (terrain_grid_occupy_list_[cur_id] != 0) {
-            if (!is_robot_terrain_init) {
-                float avg_h = 0.0f;
-                int counter = 0;
-                for (const auto& e : terrain_height_grid_->GetCell(cur_id)) {
-                    if (abs(e - FARUtil::robot_pos.z + FARUtil::vehicle_height) > H_THRED) continue;
-                    avg_h += e, counter++;
-                }
-                if (counter > 0) {
-                    avg_h /= (float)counter;
-                    terrain_height_grid_->GetCell(cur_id).resize(1);
-                    terrain_height_grid_->GetCell(cur_id)[0] = avg_h;
-                    AddTraversePoint(cur_id);
-                    is_robot_terrain_init = true;  // init terrain height map current robot height
-                    q.clear();
-                }
-            } else {
-                AddTraversePoint(cur_id);
-            }
-        } else if (is_robot_terrain_init) {
-            continue;
-        }
-        const Eigen::Vector3i csub = terrain_height_grid_->Ind2Sub(cur_id);
-        for (int i = 0; i < 4; i++) {
-            Eigen::Vector3i ref_sub = csub;
-            ref_sub.x() += dx[i], ref_sub.y() += dy[i];
-            if (!terrain_height_grid_->InRange(ref_sub)) continue;
-            const int ref_id = terrain_height_grid_->Sub2Ind(ref_sub);
-            if (!visited_set.count(ref_id) && (!is_robot_terrain_init || IsTraversableNeighbor(cur_id, ref_id))) {
-                q.push_back(ref_id);
-                visited_set.insert(ref_id);
-            }
-        }
-    }
 }
 
 void MapHandler::GetNeighborCeilsCenters(PointStack& neighbor_centers) {
@@ -666,7 +585,7 @@ void MapHandler::GridToImg(cv::Mat& height_img, cv::Mat& var_img, cv::Mat& mask_
 }
 
 // 计算可通行图
-void MapHandler::ComputeTerrainRiskAttributes() {
+void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeightOut) {
     if (!terrain_height_grid_) return;
 
     // ============================================================
@@ -688,6 +607,7 @@ void MapHandler::ComputeTerrainRiskAttributes() {
 
     int center_r = raw_h.rows / 2;
     int center_c = raw_h.cols / 2;
+    float res = terrain_height_grid_->GetResolution().x();
 
     occlusion_boundary_mask_ = cv::Mat::zeros(closed_mask.rows, closed_mask.cols, CV_8UC1);
     const float MIN_DENSITY = 1.0f;  // 降低密度阈值
@@ -747,6 +667,39 @@ void MapHandler::ComputeTerrainRiskAttributes() {
         ROS_INFO_THROTTLE(2.0, "MH: Occlusion boundary cells: %d", cv::countNonZero(occlusion_boundary_mask_));
     }
 
+    if (!occlusion_boundary_ready) {
+        float dist_moved = std::sqrt(std::pow(FARUtil::robot_pos.x - initial_robot_pos_.x, 2) +
+                                     std::pow(FARUtil::robot_pos.y - initial_robot_pos_.y, 2));
+
+        if (dist_moved < 1.5f) {
+            // 获取机器人在地形网格中的位置
+            Eigen::Vector3i robot_sub =
+                terrain_height_grid_->Pos2Sub(Eigen::Vector3d(FARUtil::robot_pos.x, FARUtil::robot_pos.y, 0.0f));
+            int robot_r = robot_sub.y();
+            int robot_c = robot_sub.x();
+
+            const float CLEAR_RADIUS = 1.8f;
+            for (int r = 0; r < occlusion_boundary_mask_.rows; r++) {
+                for (int c = 0; c < occlusion_boundary_mask_.cols; c++) {
+                    // 计算格子到机器人的实际距离
+                    float dist = std::sqrt(std::pow(r - robot_r, 2) + std::pow(c - robot_c, 2)) * res;
+                    if (dist < CLEAR_RADIUS) {
+                        occlusion_boundary_mask_.at<uchar>(r, c) = 0;
+                    }
+                }
+            }
+            if (FARUtil::IsDebug) {
+                ROS_INFO_THROTTLE(1.0, "MH: Occlusion boundary suppressed around robot (radius %.1fm, moved %.2fm)",
+                    CLEAR_RADIUS, dist_moved);
+            }
+        } else {
+            occlusion_boundary_ready = true;
+            if (FARUtil::IsDebug) {
+                ROS_INFO("MH: Occlusion boundary detection activated after %.2fm movement", dist_moved);
+            }
+        }
+    }
+
     // ============================================================
     // 步骤 3: 填补高度图并计算坡度
     // ============================================================
@@ -802,7 +755,7 @@ void MapHandler::ComputeTerrainRiskAttributes() {
     }
 
     // 计算坡度（使用处理后的输入）
-    float res = terrain_height_grid_->GetResolution().x();
+
     cv::Sobel(sobel_input, grad_x, CV_32F, 1, 0, 3, 1.0 / (8.0 * res));
     cv::Sobel(sobel_input, grad_y, CV_32F, 0, 1, 3, 1.0 / (8.0 * res));
     cv::magnitude(grad_x, grad_y, slope_mat);
@@ -813,7 +766,7 @@ void MapHandler::ComputeTerrainRiskAttributes() {
 
     for (int r = 2; r < slope_mat.rows - 2; r++) {
         for (int c = 2; c < slope_mat.cols - 2; c++) {
-            if (valid_mask.at<uchar>(r, c) == 0) {
+            if (closed_mask.at<uchar>(r, c) == 0) {
                 slope_mat.at<float>(r, c) = 0.0f;
                 slope_confidence_mask.at<float>(r, c) = 0.0f;
                 continue;
@@ -823,7 +776,7 @@ void MapHandler::ComputeTerrainRiskAttributes() {
             int valid_neighbor_count = 0;
             for (int nr = -1; nr <= 1; nr++) {
                 for (int nc = -1; nc <= 1; nc++) {
-                    if (valid_mask.at<uchar>(r + nr, c + nc) == 255) {
+                    if (closed_mask.at<uchar>(r + nr, c + nc) == 255) {
                         valid_neighbor_count++;
                     }
                 }
@@ -835,8 +788,8 @@ void MapHandler::ComputeTerrainRiskAttributes() {
             int extended_valid_count = 0;
             for (int nr = -2; nr <= 2; nr++) {
                 for (int nc = -2; nc <= 2; nc++) {
-                    if (r + nr >= 0 && r + nr < valid_mask.rows && c + nc >= 0 && c + nc < valid_mask.cols &&
-                        valid_mask.at<uchar>(r + nr, c + nc) == 255) {
+                    if (r + nr >= 0 && r + nr < closed_mask.rows && c + nc >= 0 && c + nc < closed_mask.cols &&
+                        closed_mask.at<uchar>(r + nr, c + nc) == 255) {
                         extended_valid_count++;
                     }
                 }
@@ -982,6 +935,27 @@ void MapHandler::ComputeTerrainRiskAttributes() {
     cv::morphologyEx(steep_slope_mask_, steep_slope_mask_, cv::MORPH_CLOSE, morph_kernel);
     cv::morphologyEx(moderate_slope_mask_, moderate_slope_mask_, cv::MORPH_CLOSE, morph_kernel);
 
+    // [新增] 解决重叠问题:按优先级清除冲突
+    for (int r = 0; r < valid_mask.rows; r++) {
+        for (int c = 0; c < valid_mask.cols; c++) {
+            // 障碍物优先级最高
+            if (obstacle_mask_.at<uchar>(r, c) > 100) {
+                steep_slope_mask_.at<uchar>(r, c) = 0;
+                moderate_slope_mask_.at<uchar>(r, c) = 0;
+                flat_terrain_mask_.at<uchar>(r, c) = 0;
+            }
+            // 陡坡优先级第二
+            else if (steep_slope_mask_.at<uchar>(r, c) > 100) {
+                moderate_slope_mask_.at<uchar>(r, c) = 0;
+                flat_terrain_mask_.at<uchar>(r, c) = 0;
+            }
+            // 缓坡优先级第三
+            else if (moderate_slope_mask_.at<uchar>(r, c) > 100) {
+                flat_terrain_mask_.at<uchar>(r, c) = 0;
+            }
+        }
+    }
+
     // 保存当前帧状态
     prev_steep_slope_mask_ = steep_slope_mask_.clone();
     prev_moderate_slope_mask_ = moderate_slope_mask_.clone();
@@ -1101,6 +1075,33 @@ void MapHandler::ComputeTerrainRiskAttributes() {
 
     if (FARUtil::IsDebug) {
         ROS_INFO_THROTTLE(2.0, "MH: Slope cloud: %lu points", slope_cloud_->size());
+    }
+    // ============================================================
+    // 步骤 10: 填充 terrain_grid_traverse_list_ 和 terrainHeightOut
+    // ============================================================
+    std::fill(terrain_grid_traverse_list_.begin(), terrain_grid_traverse_list_.end(), 0);
+    terrainHeightOut->clear();
+
+    // 遍历 ave_high_terrain_cloud_，标记可通行区域
+    for (const auto& point : ave_high_terrain_cloud_->points) {
+        Eigen::Vector3i sub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, 0.0f));
+        if (!terrain_height_grid_->InRange(sub)) continue;
+
+        int r = sub.y();
+        int c = sub.x();
+        int ind = terrain_height_grid_->Sub2Ind(sub);
+
+        // 只有非障碍区域才标记为可通行，并加入 terrainHeightOut
+        if (obstacle_mask_.at<uchar>(r, c) == 0) {
+            terrain_grid_traverse_list_[ind] = 1;
+            terrainHeightOut->points.push_back(point);
+        }
+    }
+
+    if (FARUtil::IsDebug) {
+        ROS_INFO_THROTTLE(2.0, "MH: Traversable cells: %ld, terrainHeightOut: %lu points",
+            std::count(terrain_grid_traverse_list_.begin(), terrain_grid_traverse_list_.end(), 1),
+            terrainHeightOut->size());
     }
 }
 

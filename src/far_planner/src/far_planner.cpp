@@ -174,7 +174,6 @@ void FARMaster::Loop() {
         /* Extract Vertices and new nodes */
         FARUtil::Timer.start_time("Total V-Graph Update");
 
-        // cv::Mat obstacle_mask = map_handler_.GetObstacleMask();
         PointCloudPtr obstacle_cloud = map_handler_.GetObsOutCloud();
 
         contour_detector_.BuildTerrainImgAndExtractContour(odom_node_ptr_, obstacle_cloud, realworld_contour_);
@@ -195,8 +194,8 @@ void FARMaster::Loop() {
                       << std::endl;
         }
         /* Adjust heights with terrain */
-        map_handler_.AdjustCTNodeHeight(ContourGraph::contour_graph_);
-        map_handler_.AdjustNodesHeight(nav_graph_);
+        // map_handler_.AdjustCTNodeHeight(ContourGraph::contour_graph_);
+        // map_handler_.AdjustNodesHeight(nav_graph_);
         // Truncate for local range nodes
         graph_manager_.UpdateGlobalNearNodes();
         near_nav_graph_ = graph_manager_.GetExtendLocalNode();
@@ -656,9 +655,12 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
         FARUtil::CropBoxCloud(temp_cloud_ptr_, robot_pos_,
             Point3D(master_params_.terrain_range, master_params_.terrain_range, master_params_.terrain_range));
         FARUtil::ExtractFreeAndObsCloud(temp_cloud_ptr_, temp_free_ptr_, temp_obs_ptr_);
-        if (!master_params_.is_static_env) {
-            FARUtil::RemoveOverlapCloud(temp_obs_ptr_, FARUtil::stack_dyobs_cloud_, true);
-        }
+
+        map_handler_.UpdateTerrainHeightGrid(temp_cloud_ptr_, terrain_height_ptr_);
+        temp_obs_ptr_->clear();
+        // temp_obs_ptr_ = map_handler_.GetObsOutCloud();
+        PointCloudPtr obs_copy(new pcl::PointCloud<PCLPoint>());
+        *temp_obs_ptr_ = *map_handler_.GetObsOutCloud();  // 创建副本
         map_handler_.UpdateObsCloudGrid(temp_obs_ptr_);
         map_handler_.UpdateFreeCloudGrid(temp_free_ptr_);
         // extract new points
@@ -670,7 +672,6 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     // extract surround free cloud & update terrain height
     map_handler_.GetSurroundFreeCloud(FARUtil::surround_free_cloud_);
     // map_handler_.UpdateTerrainHeightGrid(FARUtil::surround_free_cloud_, terrain_height_ptr_);
-    map_handler_.UpdateTerrainHeightGrid(temp_cloud_ptr_, terrain_height_ptr_);
 
     temp_risk_cloud_ = map_handler_.GetRiskCloud();
     temp_risk_rgb_cloud_ = map_handler_.GetRiskRBGCloud();
@@ -678,23 +679,6 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     map_handler_.GetSurroundObsCloud(FARUtil::surround_obs_cloud_);
     // extract dynamic obstacles
     FARUtil::cur_dyobs_cloud_->clear();
-    if (!master_params_.is_static_env && !is_stop_update_) {
-        this->ExtractDynamicObsFromScan(FARUtil::cur_scan_cloud_, FARUtil::surround_obs_cloud_,
-            FARUtil::surround_free_cloud_, FARUtil::cur_dyobs_cloud_);
-        if (FARUtil::cur_dyobs_cloud_->size() > FARUtil::kDyObsThred) {
-            if (FARUtil::IsDebug)
-                ROS_WARN("FARMaster: dynamic obstacle detected, size: %ld", FARUtil::cur_dyobs_cloud_->size());
-            FARUtil::InflateCloud(FARUtil::cur_dyobs_cloud_, master_params_.voxel_dim, 1, true);
-            map_handler_.RemoveObsCloudFromGrid(FARUtil::cur_dyobs_cloud_);
-            FARUtil::RemoveOverlapCloud(FARUtil::surround_obs_cloud_, FARUtil::cur_dyobs_cloud_);
-            FARUtil::FilterCloud(FARUtil::cur_dyobs_cloud_, master_params_.voxel_dim);
-            // update new cloud
-            *FARUtil::cur_new_cloud_ += *FARUtil::cur_dyobs_cloud_;
-            FARUtil::FilterCloud(FARUtil::cur_new_cloud_, master_params_.voxel_dim);
-        }
-        // update world dynamic obstacles
-        FARUtil::StackCloudByTime(FARUtil::cur_dyobs_cloud_, FARUtil::stack_dyobs_cloud_, FARUtil::kObsDecayTime);
-    }
 
     // create and update kdtrees
     FARUtil::StackCloudByTime(FARUtil::cur_new_cloud_, FARUtil::stack_new_cloud_, FARUtil::kNewDecayTime);
@@ -703,10 +687,10 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     if (!FARUtil::surround_free_cloud_->empty()) is_cloud_init_ = true;
 
     /* visualize clouds */
-    // planner_viz_.VizPointCloud(new_PCL_pub_, FARUtil::stack_new_cloud_);
+    planner_viz_.VizPointCloud(new_PCL_pub_, FARUtil::stack_new_cloud_);
     // planner_viz_.VizPointCloud(dynamic_obs_pub_, FARUtil::cur_dyobs_cloud_);
     // planner_viz_.VizPointCloud(surround_free_debug_, FARUtil::surround_free_cloud_);
-    // planner_viz_.VizPointCloud(surround_obs_debug_, FARUtil::surround_obs_cloud_);
+    planner_viz_.VizPointCloud(surround_obs_debug_, FARUtil::surround_obs_cloud_);
     planner_viz_.VizPointCloud(terrain_height_pub_, map_handler_.ave_high_terrain_cloud_);
     planner_viz_.VizPointCloud(risk_debug_pub_, temp_risk_cloud_);
     planner_viz_.VizRGBPointCloud(rgb_risk_debug_pub_, temp_risk_rgb_cloud_);
