@@ -940,6 +940,11 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
         for (int c = 0; c < valid_mask.cols; c++) {
             // 障碍物优先级最高
             if (obstacle_mask_.at<uchar>(r, c) > 100) {
+                occlusion_boundary_mask_.at<uchar>(r, c) = 0;
+                steep_slope_mask_.at<uchar>(r, c) = 0;
+                moderate_slope_mask_.at<uchar>(r, c) = 0;
+                flat_terrain_mask_.at<uchar>(r, c) = 0;
+            } else if (occlusion_boundary_mask_.at<uchar>(r, c) > 100) {
                 steep_slope_mask_.at<uchar>(r, c) = 0;
                 moderate_slope_mask_.at<uchar>(r, c) = 0;
                 flat_terrain_mask_.at<uchar>(r, c) = 0;

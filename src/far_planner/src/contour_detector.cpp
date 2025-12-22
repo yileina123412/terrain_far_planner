@@ -176,6 +176,87 @@ void ContourDetector::TopoFilterContours(std::vector<CVPointStack>& contoursInOu
     }
 }
 
+float ContourDetector::GetNeighborAverageHeight(const Point3D& point, float search_radius) {
+    // 使用 MapHandler 的静态 kdtree 查询邻域点
+    if (!MapHandler::kdtree_terrain_clould_ || !MapHandler::kdtree_terrain_clould_->getInputCloud() ||
+        MapHandler::kdtree_terrain_clould_->getInputCloud()->empty()) {
+        ROS_WARN_THROTTLE(5.0, "CD: Terrain KdTree not available for height query");
+        return point.z;
+    }
+
+    PCLPoint query_point;
+    query_point.x = point.x;
+    query_point.y = point.y;
+    query_point.z = 0.0f;
+
+    std::vector<int> point_indices;
+    std::vector<float> point_distances;
+
+    int num_found =
+        MapHandler::kdtree_terrain_clould_->radiusSearch(query_point, search_radius, point_indices, point_distances);
+
+    if (num_found < 1) {
+        return point.z;
+    }
+
+    // 获取 terrain_height_grid_ 用于判断点是否在障碍物区域
+    const auto& terrain_grid = MapHandler::terrain_height_grid_;
+    if (!terrain_grid) {
+        // 如果无法访问网格，使用简化版本
+        float height_sum = 0.0f;
+        int valid_count = 0;
+        const auto& cloud = MapHandler::kdtree_terrain_clould_->getInputCloud();
+
+        for (int idx : point_indices) {
+            float neighbor_height = cloud->points[idx].intensity;
+            float height_diff = std::abs(neighbor_height - point.z);
+            if (height_diff < 2.0f) {
+                height_sum += neighbor_height;
+                valid_count++;
+            }
+        }
+
+        return (valid_count > 0) ? (height_sum / valid_count) : point.z;
+    }
+
+    // 增强版本：查询 obstacle_mask_ 来排除障碍物
+    float height_sum = 0.0f;
+    int valid_count = 0;
+    const auto& cloud = MapHandler::kdtree_terrain_clould_->getInputCloud();
+
+    for (int idx : point_indices) {
+        const PCLPoint& neighbor_pt = cloud->points[idx];
+
+        // 将世界坐标转换为网格坐标
+        Eigen::Vector3i sub = terrain_grid->Pos2Sub(Eigen::Vector3d(neighbor_pt.x, neighbor_pt.y, 0.0f));
+
+        // 检查是否在网格范围内
+        if (!terrain_grid->InRange(sub)) continue;
+
+        int row = sub.y();
+        int col = sub.x();
+
+        // 通过外部静态访问器获取障碍物掩膜（需要 MapHandler 提供）
+        // 假设有静态方法: MapHandler::IsObstacleAtGridPos(row, col)
+        // 或者简化：通过高度差判断
+        float neighbor_height = neighbor_pt.intensity;
+        float height_diff = std::abs(neighbor_height - point.z);
+
+        // 排除高度差过大的点（可能是障碍物）
+        if (height_diff < 2.0f) {
+            height_sum += neighbor_height;
+            valid_count++;
+        }
+    }
+
+    if (valid_count > 0) {
+        float avg_height = height_sum / valid_count;
+        return avg_height;
+    } else {
+        return point.z;
+    }
+}
+
 // 陡坡提取
 void ContourDetector::ExtractSteepSlopePoints(const PointCloudPtr& steep_cloud, const NavNodePtr& odom_node_ptr,
     std::vector<PointStack>& boundary_clusters, std::vector<PointStack>& inner_clusters) {
@@ -208,7 +289,7 @@ void ContourDetector::ExtractSteepSlopePoints(const PointCloudPtr& steep_cloud, 
         return;
     }
 
-    ROS_INFO("CD: Cropped %lu steep points within %.1fm", cropped_cloud->size(), crop_radius);
+    // ROS_INFO("CD: Cropped %lu steep points within %.1fm", cropped_cloud->size(), crop_radius);
 
     // ============================================================
     // 步骤 2: 欧式聚类
@@ -230,7 +311,7 @@ void ContourDetector::ExtractSteepSlopePoints(const PointCloudPtr& steep_cloud, 
         return;
     }
 
-    ROS_INFO("CD: Found %lu steep slope clusters", cluster_indices.size());
+    // ROS_INFO("CD: Found %lu steep slope clusters", cluster_indices.size());
 
     // [改进] 预分配空间
     boundary_clusters.resize(cluster_indices.size());
@@ -246,17 +327,17 @@ void ContourDetector::ExtractSteepSlopePoints(const PointCloudPtr& steep_cloud, 
             cluster->push_back((*cropped_cloud)[idx]);
         }
 
-        ROS_INFO("CD: Processing cluster %lu with %lu points", i, cluster->size());
+        // ROS_INFO("CD: Processing cluster %lu with %lu points", i, cluster->size());
 
         // [改进] 直接存储到对应的聚类索引中
         ExtractBoundaryPoints(cluster, boundary_clusters[i]);
         ExtractInnerPoints(cluster, inner_clusters[i]);
 
-        ROS_INFO(
-            "CD: Cluster %lu - boundary: %lu, inner: %lu", i, boundary_clusters[i].size(), inner_clusters[i].size());
+        // ROS_INFO(
+        //     "CD: Cluster %lu - boundary: %lu, inner: %lu", i, boundary_clusters[i].size(), inner_clusters[i].size());
     }
 
-    ROS_INFO("CD: Total clusters: %lu", boundary_clusters.size());
+    // ROS_INFO("CD: Total clusters: %lu", boundary_clusters.size());
 }
 
 void ContourDetector::ExtractBoundaryPoints(const PointCloudPtr& cluster, PointStack& boundary_points) {
@@ -370,7 +451,7 @@ void ContourDetector::ExtractBoundaryPoints(const PointCloudPtr& cluster, PointS
         }
     }
 
-    ROS_INFO("CD: Detected %lu corner points (angle > %.1f deg)", corner_points.size(), angle_threshold);
+    // ROS_INFO("CD: Detected %lu corner points (angle > %.1f deg)", corner_points.size(), angle_threshold);
 
     // 阶段2: 在相邻拐点之间插值采样
     pcl::KdTreeFLANN<PCLPoint> kdtree;
@@ -414,7 +495,7 @@ void ContourDetector::ExtractBoundaryPoints(const PointCloudPtr& cluster, PointS
             accumulated += edge_len;
         }
 
-        ROS_INFO("CD: Steep boundary: %lu points (uniform)", boundary_points.size());
+        // ROS_INFO("CD: Steep boundary: %lu points (uniform)", boundary_points.size());
         return;
     }
 
@@ -490,8 +571,8 @@ void ContourDetector::ExtractBoundaryPoints(const PointCloudPtr& cluster, PointS
         }
     }
 
-    ROS_INFO("CD: Steep boundary: %lu points (%lu corners + interpolation, %s hull)", boundary_points.size(),
-        corner_points.size(), is_concave ? "concave" : "convex");
+    //  ROS_INFO("CD: Steep boundary: %lu points (%lu corners + interpolation, %s hull)", boundary_points.size(),
+    //     corner_points.size(), is_concave ? "concave" : "convex");
 }
 // ============================================================
 // 辅助函数: 提取内部点(体素滤波)
@@ -545,7 +626,7 @@ void ContourDetector::ExtractModerateSlopePoints(const PointCloudPtr& moderate_c
         return;
     }
 
-    ROS_INFO("CD: Cropped %lu moderate points within %.1fm", cropped_cloud->size(), crop_radius);
+    // ROS_INFO("CD: Cropped %lu moderate points within %.1fm", cropped_cloud->size(), crop_radius);
 
     // ============================================================
     // 步骤 2: 欧式聚类
@@ -567,7 +648,7 @@ void ContourDetector::ExtractModerateSlopePoints(const PointCloudPtr& moderate_c
         return;
     }
 
-    ROS_INFO("CD: Found %lu moderate slope clusters", cluster_indices.size());
+    // ROS_INFO("CD: Found %lu moderate slope clusters", cluster_indices.size());
 
     // 预分配空间
     boundary_clusters.resize(cluster_indices.size());
@@ -583,18 +664,18 @@ void ContourDetector::ExtractModerateSlopePoints(const PointCloudPtr& moderate_c
             cluster->push_back((*cropped_cloud)[idx]);
         }
 
-        ROS_INFO("CD: Processing moderate cluster %lu with %lu points", i, cluster->size());
+        // ROS_INFO("CD: Processing moderate cluster %lu with %lu points", i, cluster->size());
 
         // 提取边界点和内部点
         // ExtractModerateBoundaryPoints(cluster, boundary_clusters[i]);
         ExtractModerateInnerPoints(cluster, inner_clusters[i]);
         boundary_clusters.clear();
 
-        ROS_INFO("CD: Moderate cluster %lu - boundary: %lu, inner: %lu", i, boundary_clusters[i].size(),
-            inner_clusters[i].size());
+        // ROS_INFO("CD: Moderate cluster %lu - boundary: %lu, inner: %lu", i, boundary_clusters[i].size(),
+        //     inner_clusters[i].size());
     }
 
-    ROS_INFO("CD: Total moderate clusters: %lu", boundary_clusters.size());
+    // ROS_INFO("CD: Total moderate clusters: %lu", boundary_clusters.size());
 }
 
 // ============================================================
@@ -674,8 +755,8 @@ void ContourDetector::ExtractModerateBoundaryPoints(const PointCloudPtr& cluster
     int total_samples = std::max(3, (int)(total_perimeter / sample_dist));
     float actual_sample_dist = total_perimeter / total_samples;
 
-    ROS_INFO(
-        "CD: Moderate perimeter=%.2fm, samples=%d, dist=%.2fm", total_perimeter, total_samples, actual_sample_dist);
+    // ROS_INFO(
+    //     "CD: Moderate perimeter=%.2fm, samples=%d, dist=%.2fm", total_perimeter, total_samples, actual_sample_dist);
 
     // 沿周长采样
     float accumulated_length = 0.0f;

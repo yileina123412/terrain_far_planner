@@ -6,6 +6,14 @@
 enum NodeType { NOT_DEFINED = 0, GROUND = 1, AIR = 2 };
 
 enum NodeFreeDirect { UNKNOW = 0, CONVEX = 1, CONCAVE = 2, PILLAR = 3 };
+enum TerrainType {
+    TERRAIN_UNKNOWN = 0,
+    TERRAIN_OBSTACLE = 1,
+    TERRAIN_STEEP = 2,
+    TERRAIN_MODERATE = 3,
+    TERRAIN_FLAT = 4,
+    TERRAIN_OCCLUSION = 5  //未知环境，前沿
+};
 
 typedef std::pair<Point3D, Point3D> PointPair;
 
@@ -45,10 +53,11 @@ struct CTNode {
 
     std::vector<std::shared_ptr<CTNode>> connect_nodes;
 
-    // [新增] 梯度信息
-    float gradient_x = 0.0f;
-    float gradient_y = 0.0f;
-    float slope_magnitude = 0.0f;
+    // 1. 地形分类标签
+    TerrainType terrain_type = TERRAIN_UNKNOWN;
+    // 梯度信息
+    Point3D gradient = Point3D(0.0f, 0.0f, 0.0f);
+    float slop;
 };
 
 typedef std::shared_ptr<CTNode> CTNodePtr;
@@ -97,6 +106,15 @@ struct NavNode {
     float gscore, fgscore;
     std::shared_ptr<NavNode> parent;
     std::shared_ptr<NavNode> free_parent;
+
+    // 地形感知属性
+    // 1. 地形类型 (用于连接规则判断)
+    TerrainType terrain_type = TERRAIN_UNKNOWN;
+    // 如果三个都是 false，默认为 Flat (平地)
+    // 2. 梯度向量 (用于 Cost 计算)
+    // 存储归一化的梯度方向 (nx, ny, nz)
+    Point3D gradient = Point3D(0.0f, 0.0f, 0.0f);
+    float slop;
 };
 
 typedef std::shared_ptr<NavNode> NavNodePtr;

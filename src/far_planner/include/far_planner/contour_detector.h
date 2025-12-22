@@ -87,6 +87,11 @@ private:
         for (std::size_t i = 0; i < vec_size; i++) {
             cv::Point2f cv_p = cv_vec[i];
             Point3D p = ConvertCVPointToPoint3D(cv_p, odom_pos_, is_resized_img);
+            // [新增] 使用邻域平均高度替代机器人高度
+            float neighbor_height = GetNeighborAverageHeight(p, 1.5f);  // 1.5米搜索半径
+            if (neighbor_height != p.z) {                               // 找到了有效的邻域高度
+                p.z = neighbor_height;
+            }
             p_vec[i] = p;
         }
     }
@@ -218,6 +223,8 @@ private:
             }
         }
     }
+    // [新增] 获取点的邻域平均高度（排除障碍物区域）
+    float GetNeighborAverageHeight(const Point3D& point, float search_radius = 1.5f);
 
     // 陡坡处理辅助函数
     void ExtractBoundaryPoints(const PointCloudPtr& cluster, PointStack& boundary_points);

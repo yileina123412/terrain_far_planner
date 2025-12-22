@@ -22,6 +22,7 @@ void DPVisualizer::Init(const ros::NodeHandle& nh) {
 
     viz_steep_clusters_pub_ = nh_.advertise<MarkerArray>("/viz_steep_clusters_topic", 5);
     viz_moderate_clusters_pub_ = nh_.advertise<MarkerArray>("/viz_moderate_clusters_topic", 5);  // [新增]
+    viz_obstacle_clusters_pub_ = nh_.advertise<MarkerArray>("/viz_obstacle_clusters_topic", 5);  // [新增] 障碍物聚类
 }
 
 void DPVisualizer::VizNodes(const NodePtrStack& node_stack, const std::string& ns, const VizColor& color,
@@ -528,7 +529,7 @@ void DPVisualizer::VizSteepSlopeClusters(
     // 发布可视化
     viz_steep_clusters_pub_.publish(cluster_marker_array);
 
-    ROS_INFO("Viz: Published %lu steep slope clusters", boundary_clusters.size());
+    // ROS_INFO("Viz: Published %lu steep slope clusters", boundary_clusters.size());
 }
 
 void DPVisualizer::VizModerateSlopeClusters(
@@ -587,5 +588,47 @@ void DPVisualizer::VizModerateSlopeClusters(
     // 发布可视化
     viz_moderate_clusters_pub_.publish(cluster_marker_array);
 
-    ROS_INFO("Viz: Published %lu moderate slope clusters", boundary_clusters.size());
+    // ROS_INFO("Viz: Published %lu moderate slope clusters", boundary_clusters.size());
+}
+
+void DPVisualizer::VizObstacleClusters(const std::vector<PointStack>& boundary_clusters) {
+    if (boundary_clusters.empty()) {
+        ROS_WARN("Viz: No obstacle clusters to visualize");
+        return;
+    }
+
+    MarkerArray cluster_marker_array;
+
+    // 定义颜色循环（使用红色系配色方案，突出障碍物）
+    std::vector<VizColor> colors = {VizColor::RED, VizColor::ORANGE, VizColor::MAGNA, VizColor::YELLOW,
+        VizColor::PURPLE, VizColor::WHITE, VizColor::BLUE};
+
+    // 遍历每个聚类
+    for (size_t i = 0; i < boundary_clusters.size(); i++) {
+        // 选择颜色（循环使用）
+        VizColor boundary_color = colors[i % colors.size()];
+
+        // 边界点 Marker（使用立方体，表示障碍物）
+        Marker boundary_marker;
+        boundary_marker.type = Marker::CUBE_LIST;
+        std::string boundary_ns = "obstacle_boundary_" + std::to_string(i);
+        this->SetMarker(boundary_color, boundary_ns, 0.4f, 0.9f, boundary_marker);
+
+        for (const auto& p : boundary_clusters[i]) {
+            geometry_msgs::Point geo_p = FARUtil::Point3DToGeoMsgPoint(p);
+            boundary_marker.points.push_back(geo_p);
+        }
+
+        // 添加到 MarkerArray
+        if (!boundary_marker.points.empty()) {
+            cluster_marker_array.markers.push_back(boundary_marker);
+        }
+
+        ROS_INFO("Viz: Obstacle cluster %lu - boundary: %lu points (cubes)", i, boundary_clusters[i].size());
+    }
+
+    // 发布可视化
+    viz_obstacle_clusters_pub_.publish(cluster_marker_array);
+
+    // ROS_INFO("Viz: Published %lu obstacle clusters", boundary_clusters.size());
 }

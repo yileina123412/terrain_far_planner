@@ -174,8 +174,8 @@ void FARMaster::Loop() {
         /* Extract Vertices and new nodes */
         FARUtil::Timer.start_time("Total V-Graph Update");
 
+        // 提取障碍物的边界
         PointCloudPtr obstacle_cloud = map_handler_.GetObsOutCloud();
-
         contour_detector_.BuildTerrainImgAndExtractContour(odom_node_ptr_, obstacle_cloud, realworld_contour_);
         steep_cloud_ = map_handler_.GetSteepOutCloud();
         // 提取陡坡的边界
@@ -185,8 +185,10 @@ void FARMaster::Loop() {
         moderate_cloud_ = map_handler_.GetModerateOutCloud();
         contour_detector_.ExtractModerateSlopePoints(
             moderate_cloud_, odom_node_ptr_, moderate_boundary_clusters_, moderate_inner_clusters_);
-
+        // 把障碍物点云加入了ctnode
         contour_graph_.UpdateContourGraph(odom_node_ptr_, realworld_contour_);
+        contour_graph_.UpdateContourGraphTerrain(
+            steep_boundary_clusters_, steep_inner_clusters_, moderate_boundary_clusters_, moderate_inner_clusters_);
         if (is_graph_init_) {
             if (!FARUtil::IsDebug) printf("\033[2K");
             std::cout << "    "
@@ -250,6 +252,7 @@ void FARMaster::Loop() {
         // planner_viz_.VizGlobalPolygons(ContourGraph::global_contour_, ContourGraph::unmatched_contour_);
         planner_viz_.VizSteepSlopeClusters(steep_boundary_clusters_, steep_inner_clusters_);
         planner_viz_.VizModerateSlopeClusters(moderate_boundary_clusters_, moderate_inner_clusters_);
+        planner_viz_.VizObstacleClusters(realworld_contour_);
         if (is_graph_init_) {
             if (FARUtil::IsDebug) {
                 std::cout << " ========================================================== " << std::endl;
@@ -819,6 +822,14 @@ std::unordered_set<int> MapHandler::extend_obs_indices_;
 std::unique_ptr<grid_ns::Grid<PointCloudPtr>> MapHandler::world_free_cloud_grid_;
 std::unique_ptr<grid_ns::Grid<PointCloudPtr>> MapHandler::world_obs_cloud_grid_;
 std::unique_ptr<grid_ns::Grid<std::vector<float>>> MapHandler::terrain_height_grid_;
+cv::Mat MapHandler::grad_x;
+cv::Mat MapHandler::grad_y;
+cv::Mat MapHandler::slope_mat;
+cv::Mat MapHandler::obstacle_mask_;            // 障碍物（红色）
+cv::Mat MapHandler::occlusion_boundary_mask_;  // 遮挡边界（绿色）- 已有
+cv::Mat MapHandler::steep_slope_mask_;         // 陡坡（黄色）
+cv::Mat MapHandler::moderate_slope_mask_;      // 缓坡（蓝色）
+cv::Mat MapHandler::flat_terrain_mask_;        // 平地（白色）
 
 int main(int argc, char** argv) {
     ros::init(argc, argv, "far_planner_node");

@@ -22,13 +22,17 @@ struct MapHandlerParams {
 
 class MapHandler {
 public:
+    static std::unique_ptr<grid_ns::Grid<std::vector<float>>> terrain_height_grid_;
     PointCloudPtr ave_high_terrain_cloud_;
+    static PointKdTreePtr kdtree_terrain_clould_;
+
+    static cv::Mat grad_x, grad_y, slope_mat;
     // [新增] 五类地形的 CV 图
-    cv::Mat obstacle_mask_;            // 障碍物（红色）
-    cv::Mat occlusion_boundary_mask_;  // 遮挡边界（绿色）- 已有
-    cv::Mat steep_slope_mask_;         // 陡坡（黄色）
-    cv::Mat moderate_slope_mask_;      // 缓坡（蓝色）
-    cv::Mat flat_terrain_mask_;        // 平地（白色）
+    static cv::Mat obstacle_mask_;            // 障碍物（红色）
+    static cv::Mat occlusion_boundary_mask_;  // 遮挡边界（绿色）- 已有
+    static cv::Mat steep_slope_mask_;         // 陡坡（黄色）
+    static cv::Mat moderate_slope_mask_;      // 缓坡（蓝色）
+    static cv::Mat flat_terrain_mask_;        // 平地（白色）
 
     // [新增] 五类地形的点云
     PointCloudRGB obstacle_cloud_;
@@ -201,9 +205,15 @@ public:
     PointCloudPtr GetSlopeCloud() const {
         return slope_cloud_;
     }
+    cv::Mat GetGradX() const {
+        return grad_x;
+    }
+    cv::Mat GetGradY() const {
+        return grad_y;
+    }
 
     // 根据世界坐标查询梯度向量
-    bool GetGradientAtPosition(const Point3D& world_pos, float& gx, float& gy, float& slope) const {
+    static inline bool GetGradientAtPosition(const Point3D& world_pos, float& gx, float& gy, float& slope) {
         if (!terrain_height_grid_) return false;
 
         // 世界坐标 → 网格索引
@@ -216,16 +226,31 @@ public:
             return false;
         }
 
-        // 检查该点是否有效
-        if (valid_mask.at<uchar>(r, c) == 0) {
-            return false;
-        }
+        // // 检查该点是否有效
+        // if (valid_mask.at<uchar>(r, c) == 0) {
+        //     return false;
+        // }
 
         // 返回梯度
         gx = grad_x.at<float>(r, c);
         gy = grad_y.at<float>(r, c);
         slope = slope_mat.at<float>(r, c);
         return true;
+    }
+
+    static inline TerrainType GetTerrainTypeAt(const Point3D& pos) {
+        Eigen::Vector3i sub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(pos.x, pos.y, 0.0f));
+        int r = sub.y();
+        int c = sub.x();
+        if (r < 0 || r >= obstacle_mask_.rows || c < 0 || c >= obstacle_mask_.cols) return TERRAIN_UNKNOWN;
+
+        if (obstacle_mask_.at<uchar>(r, c) > 100) return TERRAIN_OBSTACLE;
+        if (steep_slope_mask_.at<uchar>(r, c) > 100) return TERRAIN_STEEP;
+        if (moderate_slope_mask_.at<uchar>(r, c) > 100) return TERRAIN_MODERATE;
+        if (flat_terrain_mask_.at<uchar>(r, c) > 100) return TERRAIN_FLAT;
+        if (occlusion_boundary_mask_.at<uchar>(r, c) > 100) return TERRAIN_OCCLUSION;  //
+
+        return TERRAIN_UNKNOWN;
     }
 
 private:
@@ -235,7 +260,7 @@ private:
     int INFLATE_N;
     bool is_init_ = false;
     PointCloudPtr flat_terrain_cloud_;
-    static PointKdTreePtr kdtree_terrain_clould_;
+
     // 上帝视角的二值化风险地图
     bool occlusion_boundary_ready = false;
     bool risk_map_ready_ = false;
@@ -244,8 +269,6 @@ private:
     cv::Mat risk_mask_mat_;
     // 高度 高度差
     cv::Mat raw_h, inner_diff, valid_mask;
-
-    cv::Mat grad_x, grad_y, slope_mat;
 
     // 坡度风险，高度风险，最终风险
     cv::Mat slope_risk, step_risk, final_risk;
@@ -318,7 +341,6 @@ private:
 
     static std::unique_ptr<grid_ns::Grid<PointCloudPtr>> world_free_cloud_grid_;
     static std::unique_ptr<grid_ns::Grid<PointCloudPtr>> world_obs_cloud_grid_;
-    static std::unique_ptr<grid_ns::Grid<std::vector<float>>> terrain_height_grid_;
 };
 
 #endif

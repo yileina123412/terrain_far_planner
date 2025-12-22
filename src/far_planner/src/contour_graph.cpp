@@ -1,12 +1,11 @@
 /*
  * FAR Planner
  * Copyright (C) 2021 Fan Yang - All rights reserved
- * fanyang2@andrew.cmu.edu,   
+ * fanyang2@andrew.cmu.edu,
  */
 
-
-
 #include "far_planner/contour_graph.h"
+
 #include "far_planner/intersection.h"
 
 /***************************************************************************************/
@@ -20,37 +19,39 @@ void ContourGraph::Init(const ContourGraphParams& params) {
     ContourGraph::global_contour_set_.clear();
     ContourGraph::boundary_contour_set_.clear();
 }
-
-void ContourGraph::UpdateContourGraph(const NavNodePtr& odom_node_ptr,
-                                      const std::vector<std::vector<Point3D>>& filtered_contours) {
+// 传入轮廓节点，将轮廓点转化为ct点，并整理多边形
+void ContourGraph::UpdateContourGraph(
+    const NavNodePtr& odom_node_ptr, const std::vector<std::vector<Point3D>>& filtered_contours) {
     odom_node_ptr_ = odom_node_ptr;
     this->ClearContourGraph();
+    // 创建多边形
     for (const auto& poly : filtered_contours) {
         PolygonPtr new_poly_ptr = NULL;
         this->CreatePolygon(poly, new_poly_ptr);
         this->AddPolyToContourPolygon(new_poly_ptr);
     }
     ContourGraph::UpdateOdomFreePosition(odom_node_ptr_, FARUtil::free_odom_p);
+    // 遍历多边形并创建ct点
     for (const auto& poly_ptr : ContourGraph::contour_polygons_) {
         poly_ptr->is_robot_inside = FARUtil::PointInsideAPoly(poly_ptr->vertices, FARUtil::free_odom_p);
         CTNodePtr new_ctnode_ptr = NULL;
         if (poly_ptr->is_pillar) {
             Point3D mean_p = FARUtil::AveragePoints(poly_ptr->vertices);
-            this->CreateCTNode(mean_p, new_ctnode_ptr, poly_ptr, true);
+            this->CreateCTNodeObs(mean_p, new_ctnode_ptr, poly_ptr, true);
             this->AddCTNodeToGraph(new_ctnode_ptr);
         } else {
             CTNodeStack ctnode_stack;
             ctnode_stack.clear();
             const int N = poly_ptr->vertices.size();
-            for (std::size_t idx=0; idx<N; idx++) {
-                this->CreateCTNode(poly_ptr->vertices[idx], new_ctnode_ptr, poly_ptr, false);
+            for (std::size_t idx = 0; idx < N; idx++) {
+                this->CreateCTNodeObs(poly_ptr->vertices[idx], new_ctnode_ptr, poly_ptr, false);
                 ctnode_stack.push_back(new_ctnode_ptr);
             }
-            // add connections to contour nodes
-            for (int idx=0; idx<N; idx++) {
-                int ref_idx = FARUtil::Mod(idx-1, N);
+            // add connections to contour nodes 把前后节点补上
+            for (int idx = 0; idx < N; idx++) {
+                int ref_idx = FARUtil::Mod(idx - 1, N);
                 ctnode_stack[idx]->front = ctnode_stack[ref_idx];
-                ref_idx = FARUtil::Mod(idx+1, N);
+                ref_idx = FARUtil::Mod(idx + 1, N);
                 ctnode_stack[idx]->back = ctnode_stack[ref_idx];
                 this->AddCTNodeToGraph(ctnode_stack[idx]);
             }
@@ -58,41 +59,134 @@ void ContourGraph::UpdateContourGraph(const NavNodePtr& odom_node_ptr,
             if (!ctnode_stack.empty()) ContourGraph::polys_ctnodes_.push_back(ctnode_stack.front());
         }
     }
-    this->AnalysisSurfAngleAndConvexity(ContourGraph::contour_graph_);      
+    this->AnalysisSurfAngleAndConvexity(ContourGraph::contour_graph_);
+}
+void ContourGraph::UpdateContourGraphTerrain(const std::vector<std::vector<Point3D>>& steep_boundary,
+    const std::vector<std::vector<Point3D>>& steep_inner, const std::vector<std::vector<Point3D>>& moderate_boundary,
+    const std::vector<std::vector<Point3D>>& moderate_inner) {
+    // [新增] 前置检查
+    if (!MapHandler::terrain_height_grid_ || MapHandler::grad_x.empty() || MapHandler::grad_y.empty()) {
+        ROS_WARN("CG: Terrain maps not ready, skipping UpdateContourGraphTerrain");
+        return;
+    }
+    // 处理陡坡边界点
+    for (const auto& boundary_cluster : steep_boundary) {
+        if (boundary_cluster.size() < 3) {
+            // 轮廓点太少,跳过
+            ROS_WARN("CG: Steep boundary cluster too small (%lu points), skipping", boundary_cluster.size());
+            continue;
+        }
+
+        CTNodeStack ctnode_stack;
+        ctnode_stack.clear();
+
+        // 为每个边界点创建 CTNode
+        for (const auto& point : boundary_cluster) {
+            CTNodePtr new_ctnode_ptr = NULL;
+            this->CreatCTNodeTerrain(point, new_ctnode_ptr, true, TerrainType::TERRAIN_STEEP);
+            ctnode_stack.push_back(new_ctnode_ptr);
+        }
+
+        // // 连接 front 和 back (形成闭环轮廓)
+        const int N = ctnode_stack.size();
+        for (int idx = 0; idx < N; idx++) {
+            int ref_idx = FARUtil::Mod(idx - 1, N);
+            ctnode_stack[idx]->front = ctnode_stack[ref_idx];
+            ref_idx = FARUtil::Mod(idx + 1, N);
+            ctnode_stack[idx]->back = ctnode_stack[ref_idx];
+            this->AddCTNodeToGraph(ctnode_stack[idx]);
+        }
+
+        ROS_INFO("CG: Added %d steep boundary CTNodes", N);
+    }
+
+    // 处理陡坡内部点 (不需要 front/back 连接)
+    for (const auto& inner_cluster : steep_inner) {
+        for (const auto& point : inner_cluster) {
+            CTNodePtr new_ctnode_ptr = NULL;
+            this->CreatCTNodeTerrain(point, new_ctnode_ptr, true, TerrainType::TERRAIN_STEEP);
+            this->AddCTNodeToGraph(new_ctnode_ptr);
+        }
+        ROS_INFO("CG: Added %lu steep inner CTNodes", inner_cluster.size());
+    }
+
+    // 处理缓坡边界点
+    // for (const auto& boundary_cluster : moderate_boundary) {
+    //     if (boundary_cluster.size() < 3) {
+    //         ROS_WARN("CG: Moderate boundary cluster too small (%lu points), skipping", boundary_cluster.size());
+    //         continue;
+    //     }
+
+    //     CTNodeStack ctnode_stack;
+    //     ctnode_stack.clear();
+
+    //     for (const auto& point : boundary_cluster) {
+    //         CTNodePtr new_ctnode_ptr = NULL;
+    //         this->CreatCTNodeTerrain(point, new_ctnode_ptr, false, TerrainType::TERRAIN_MODERATE);
+    //         ctnode_stack.push_back(new_ctnode_ptr);
+    //     }
+
+    //     const int N = ctnode_stack.size();
+    //     for (int idx = 0; idx < N; idx++) {
+    //         int ref_idx = FARUtil::Mod(idx - 1, N);
+    //         ctnode_stack[idx]->front = ctnode_stack[ref_idx];
+    //         ref_idx = FARUtil::Mod(idx + 1, N);
+    //         ctnode_stack[idx]->back = ctnode_stack[ref_idx];
+    //         this->AddCTNodeToGraph(ctnode_stack[idx]);
+    //     }
+
+    //     ROS_INFO("CG: Added %d moderate boundary CTNodes", N);
+    // }
+
+    // 处理缓坡内部点
+    for (const auto& inner_cluster : moderate_inner) {
+        for (const auto& point : inner_cluster) {
+            CTNodePtr new_ctnode_ptr = NULL;
+            this->CreatCTNodeTerrain(point, new_ctnode_ptr, true, TerrainType::TERRAIN_MODERATE);
+            this->AddCTNodeToGraph(new_ctnode_ptr);
+        }
+        ROS_INFO("CG: Added %lu moderate inner CTNodes", inner_cluster.size());
+    }
+
+    // 对所有地形 CTNode 进行表面方向和凹凸性分析
+    // this->AnalysisSurfAngleAndConvexity(ContourGraph::contour_graph_);
 }
 
-/* Match current contour with global navigation nodes */
-void ContourGraph::MatchContourWithNavGraph(const NodePtrStack& global_nodes, const NodePtrStack& near_nodes, CTNodeStack& new_convex_vertices) {
+/* 将ct点转化为导航点 */
+void ContourGraph::MatchContourWithNavGraph(
+    const NodePtrStack& global_nodes, const NodePtrStack& near_nodes, CTNodeStack& new_convex_vertices) {
     for (const auto& node_ptr : global_nodes) {
         node_ptr->is_contour_match = false;
         node_ptr->ctnode = NULL;
     }
-    for (const auto& ctnode_ptr : ContourGraph::contour_graph_) { // distance match
+    for (const auto& ctnode_ptr : ContourGraph::contour_graph_) {  // distance match
         ctnode_ptr->is_global_match = false;
         ctnode_ptr->nav_node_id = 0;
         if (ctnode_ptr->free_direct != NodeFreeDirect::UNKNOW) {
             const NavNodePtr matched_node = this->NearestNavNodeForCTNode(ctnode_ptr, near_nodes);
+            // 验证匹配的有效性
             if (matched_node != NULL && IsCTMatchLineFreePolygon(ctnode_ptr, matched_node, false)) {
                 this->MatchCTNodeWithNavNode(ctnode_ptr, matched_node);
-            }   
+            }
         }
     }
     this->EnclosePolygonsCheck();
+    // 处理未匹配到的ct点
     new_convex_vertices.clear();
-    for (const auto& ctnode_ptr : ContourGraph::contour_graph_) { // Get new vertices
+    for (const auto& ctnode_ptr : ContourGraph::contour_graph_) {  // Get new vertices
         if (!ctnode_ptr->is_global_match && ctnode_ptr->free_direct != NodeFreeDirect::UNKNOW) {
-            if (ctnode_ptr->free_direct != NodeFreeDirect::PILLAR) { // check wall contour
+            if (ctnode_ptr->free_direct != NodeFreeDirect::PILLAR) {  // check wall contour
                 const float dot_value = ctnode_ptr->surf_dirs.first * ctnode_ptr->surf_dirs.second;
-                if (dot_value < ALIGN_ANGLE_COS) continue; // wall detected
+                if (dot_value < ALIGN_ANGLE_COS) continue;  // wall detected
             }
             new_convex_vertices.push_back(ctnode_ptr);
         }
     }
 }
-
+// 多边形碰撞检测  确保连接线段在自由空间中
 bool ContourGraph::IsNavNodesConnectFreePolygon(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
     if (node_ptr1->is_navpoint || node_ptr2->is_navpoint) {
-        if ((node_ptr1->position - node_ptr2->position).norm() < FARUtil::kNavClearDist) { // connect to internav node
+        if ((node_ptr1->position - node_ptr2->position).norm() < FARUtil::kNavClearDist) {  // connect to internav node
             return true;
         }
     }
@@ -122,7 +216,9 @@ bool ContourGraph::IsEdgeCollideBoundary(const Point3D& p1, const Point3D& p2) {
     if (ContourGraph::boundary_contour_.empty()) return false;
     const ConnectPair edge = ConnectPair(p1, p2);
     for (const auto& contour : ContourGraph::boundary_contour_) {
-        if (ContourGraph::IsEdgeCollideSegment(contour, edge)) {return true;}
+        if (ContourGraph::IsEdgeCollideSegment(contour, edge)) {
+            return true;
+        }
     }
     return false;
 }
@@ -143,21 +239,18 @@ bool ContourGraph::IsNavToGoalConnectFreePolygon(const NavNodePtr& node_ptr, con
     return ContourGraph::IsPointsConnectFreePolygon(cedge, bd_cedge, h_pair, is_global_check);
 }
 
-
-bool ContourGraph::IsCTMatchLineFreePolygon(const CTNodePtr& matched_ctnode, const NavNodePtr& matched_navnode, const bool& is_global_check) {
+bool ContourGraph::IsCTMatchLineFreePolygon(
+    const CTNodePtr& matched_ctnode, const NavNodePtr& matched_navnode, const bool& is_global_check) {
     if ((matched_ctnode->position - matched_navnode->position).norm() < FARUtil::kNavClearDist) return true;
     const HeightPair h_pair(matched_ctnode->position, matched_navnode->position);
     const ConnectPair bd_cedge = ConnectPair(matched_ctnode->position, matched_navnode->position);
     const ConnectPair cedge = ContourGraph::ReprojectEdge(matched_ctnode, matched_navnode, FARUtil::kProjectDist);
     return ContourGraph::IsPointsConnectFreePolygon(cedge, bd_cedge, h_pair, is_global_check);
 }
-
-bool ContourGraph::IsPointsConnectFreePolygon(const ConnectPair& cedge,
-                                              const ConnectPair& bd_cedge,
-                                              const HeightPair h_pair,
-                                              const bool& is_global_check)
-{
-    // check for boundaries edges 
+// 检查两点之间的连接线是否和多边形发生碰撞
+bool ContourGraph::IsPointsConnectFreePolygon(
+    const ConnectPair& cedge, const ConnectPair& bd_cedge, const HeightPair h_pair, const bool& is_global_check) {
+    // check for boundaries edges
     for (const auto& contour : ContourGraph::boundary_contour_) {
         if (!ContourGraph::IsEdgeOverlapInHeight(h_pair, HeightPair(contour.first, contour.second))) continue;
         if (ContourGraph::IsEdgeCollideSegment(contour, bd_cedge)) {
@@ -166,14 +259,12 @@ bool ContourGraph::IsPointsConnectFreePolygon(const ConnectPair& cedge,
     }
     if (!is_global_check) {
         // check for local range polygons
-        const Point3D center_p = Point3D((cedge.start_p.x + cedge.end_p.x) / 2.0f,
-                                         (cedge.start_p.y + cedge.end_p.y) / 2.0f,
-                                         0.0f);
+        const Point3D center_p =
+            Point3D((cedge.start_p.x + cedge.end_p.x) / 2.0f, (cedge.start_p.y + cedge.end_p.y) / 2.0f, 0.0f);
         for (const auto& poly_ptr : ContourGraph::contour_polygons_) {
             if (poly_ptr->is_pillar) continue;
-            if ((poly_ptr->is_robot_inside != FARUtil::PointInsideAPoly(poly_ptr->vertices, center_p)) || 
-                ContourGraph::IsEdgeCollidePoly(poly_ptr->vertices, cedge)) 
-            {
+            if ((poly_ptr->is_robot_inside != FARUtil::PointInsideAPoly(poly_ptr->vertices, center_p)) ||
+                ContourGraph::IsEdgeCollidePoly(poly_ptr->vertices, cedge)) {
                 return false;
             }
         }
@@ -224,13 +315,13 @@ bool ContourGraph::IsCTNodesConnectFromContour(const CTNodePtr& ctnode1, const C
         }
     }
     // forward search
-    CTNodePtr next_ctnode = ctnode1->front; 
+    CTNodePtr next_ctnode = ctnode1->front;
     while (next_ctnode != NULL && next_ctnode != ctnode1) {
         if (next_ctnode == ctnode2) {
             return true;
         }
-        if (next_ctnode->is_global_match || !FARUtil::IsInCylinder(ctnode1->position, ctnode2->position, next_ctnode->position, FARUtil::kNearDist, true)) 
-        {
+        if (next_ctnode->is_global_match || !FARUtil::IsInCylinder(ctnode1->position, ctnode2->position,
+                                                next_ctnode->position, FARUtil::kNearDist, true)) {
             break;
         } else {
             next_ctnode = next_ctnode->front;
@@ -242,8 +333,8 @@ bool ContourGraph::IsCTNodesConnectFromContour(const CTNodePtr& ctnode1, const C
         if (next_ctnode == ctnode2) {
             return true;
         }
-        if (next_ctnode->is_global_match || !FARUtil::IsInCylinder(ctnode1->position, ctnode2->position, next_ctnode->position, FARUtil::kNearDist, true)) 
-        {
+        if (next_ctnode->is_global_match || !FARUtil::IsInCylinder(ctnode1->position, ctnode2->position,
+                                                next_ctnode->position, FARUtil::kNearDist, true)) {
             break;
         } else {
             next_ctnode = next_ctnode->back;
@@ -270,7 +361,8 @@ NavNodePtr ContourGraph::MatchOutrangeNodeWithCTNode(const NavNodePtr& out_node_
         if (!node_ptr->is_contour_match) continue;
         CTNodePtr matched_ctnode = NULL;
         if (IsContourLineMatch(node_ptr, out_node_ptr, matched_ctnode)) {
-            const float dist = FARUtil::VerticalDistToLine2D(node_ptr->position, matched_ctnode->position, out_node_ptr->position);
+            const float dist =
+                FARUtil::VerticalDistToLine2D(node_ptr->position, matched_ctnode->position, out_node_ptr->position);
             if (dist < min_dist) {
                 min_dist = dist;
                 min_matched_node = node_ptr;
@@ -283,20 +375,31 @@ NavNodePtr ContourGraph::MatchOutrangeNodeWithCTNode(const NavNodePtr& out_node_
     return NULL;
 }
 
-bool ContourGraph::IsContourLineMatch(const NavNodePtr& inNode_ptr, const NavNodePtr& outNode_ptr, CTNodePtr& matched_ctnode) {
+// 判断近邻节点和超范围节点之间是否存在轮廓线集合对齐关系  超范围节点的重新连接
+// 判断两个节点之间的连线是否与环境轮廓结构对齐，找到合适的轮廓节点作为连接桥梁。
+bool ContourGraph::IsContourLineMatch(
+    const NavNodePtr& inNode_ptr, const NavNodePtr& outNode_ptr, CTNodePtr& matched_ctnode) {
+    // 关键思想：如果两个节点应该连接，那么它们的连线方向应该与环境轮廓的某个段落高度对齐。
+    // 近邻导航节点 ←→ 轮廓多边形上的某个点 ←→ 超范围导航节点
+    // 由于outNode_ptr是超出范围的轮廓点，如果可以连接，那outNode_ptr应该也是轮廓匹配的点，inNode_ptr应该如果是一个轮廓就能连上
+    // 轮廓多边形可能很大，跨越多个处理范围
     const CTNodePtr ctnode_ptr = inNode_ptr->ctnode;
     matched_ctnode = NULL;
+    // 地形节点跳过轮廓线匹配
+    if (ctnode_ptr->terrain_type == TERRAIN_STEEP || ctnode_ptr->terrain_type == TERRAIN_MODERATE ||
+        ctnode_ptr->terrain_type == TERRAIN_FLAT) {
+        return false;
+    }
     if (ctnode_ptr == NULL || ctnode_ptr->poly_ptr->is_pillar) return false;
     // check forward
     const PointPair line1(inNode_ptr->position, outNode_ptr->position);
     CTNodePtr next_ctnode = ctnode_ptr->front;
     CTNodePtr prev_ctnode = ctnode_ptr;
     while (!next_ctnode->is_global_match && next_ctnode != ctnode_ptr &&
-           FARUtil::IsInCylinder(ctnode_ptr->position, next_ctnode->position, prev_ctnode->position, FARUtil::kNearDist, true)) 
-    {
+           FARUtil::IsInCylinder(
+               ctnode_ptr->position, next_ctnode->position, prev_ctnode->position, FARUtil::kNearDist, true)) {
         if (!FARUtil::IsPointInMarginRange(next_ctnode->position) &&
-            (ctnode_ptr->position - next_ctnode->position).norm_flat() > FARUtil::kMatchDist) 
-        {
+            (ctnode_ptr->position - next_ctnode->position).norm_flat() > FARUtil::kMatchDist) {
             const PointPair line2(ctnode_ptr->position, next_ctnode->position);
             if (FARUtil::LineMatchPercentage(line1, line2) > 0.99f) {
                 if (IsCTMatchLineFreePolygon(next_ctnode, outNode_ptr, true)) {
@@ -312,11 +415,10 @@ bool ContourGraph::IsContourLineMatch(const NavNodePtr& inNode_ptr, const NavNod
     next_ctnode = ctnode_ptr->back;
     prev_ctnode = ctnode_ptr;
     while (!next_ctnode->is_global_match && next_ctnode != ctnode_ptr &&
-           FARUtil::IsInCylinder(ctnode_ptr->position, next_ctnode->position, prev_ctnode->position, FARUtil::kNearDist, true)) 
-    {
-        if (!FARUtil::IsPointInMarginRange(next_ctnode->position) && 
-            (ctnode_ptr->position - next_ctnode->position).norm_flat() > FARUtil::kMatchDist) 
-        {
+           FARUtil::IsInCylinder(
+               ctnode_ptr->position, next_ctnode->position, prev_ctnode->position, FARUtil::kNearDist, true)) {
+        if (!FARUtil::IsPointInMarginRange(next_ctnode->position) &&
+            (ctnode_ptr->position - next_ctnode->position).norm_flat() > FARUtil::kMatchDist) {
             const PointPair line2(ctnode_ptr->position, next_ctnode->position);
             if (FARUtil::LineMatchPercentage(line1, line2) > 0.99f) {
                 if (IsCTMatchLineFreePolygon(next_ctnode, outNode_ptr, true)) {
@@ -331,12 +433,14 @@ bool ContourGraph::IsContourLineMatch(const NavNodePtr& inNode_ptr, const NavNod
     return false;
 }
 
-bool ContourGraph::IsCTNodesConnectWithinOrder(const CTNodePtr& ctnode1, const CTNodePtr& ctnode2, CTNodePtr& block_vertex) {
+bool ContourGraph::IsCTNodesConnectWithinOrder(
+    const CTNodePtr& ctnode1, const CTNodePtr& ctnode2, CTNodePtr& block_vertex) {
     block_vertex = NULL;
     if (ctnode1 == ctnode2 || ctnode1->poly_ptr != ctnode2->poly_ptr) return false;
-    CTNodePtr next_ctnode = ctnode1->front; // forward search
+    CTNodePtr next_ctnode = ctnode1->front;  // forward search
     while (next_ctnode != NULL && next_ctnode != ctnode2) {
-        if (!FARUtil::IsInCylinder(ctnode1->position, ctnode2->position, next_ctnode->position, FARUtil::kNearDist, true)) {
+        if (!FARUtil::IsInCylinder(
+                ctnode1->position, ctnode2->position, next_ctnode->position, FARUtil::kNearDist, true)) {
             block_vertex = next_ctnode;
             return false;
         }
@@ -346,7 +450,7 @@ bool ContourGraph::IsCTNodesConnectWithinOrder(const CTNodePtr& ctnode1, const C
 }
 
 void ContourGraph::EnclosePolygonsCheck() {
-    for (const auto& ctnode_ptr : ContourGraph::polys_ctnodes_) { // loop each polygon
+    for (const auto& ctnode_ptr : ContourGraph::polys_ctnodes_) {  // loop each polygon
         if (ctnode_ptr->poly_ptr->is_pillar) continue;
         const CTNodePtr start_ctnode_ptr = FirstMatchedCTNode(ctnode_ptr);
         if (start_ctnode_ptr == NULL) continue;
@@ -368,12 +472,13 @@ void ContourGraph::EnclosePolygonsCheck() {
         }
     }
 }
-
-void ContourGraph::CreateCTNode(const Point3D& pos, CTNodePtr& ctnode_ptr, const PolygonPtr& poly_ptr, const bool& is_pillar) {
+// 创建障碍物的ct点
+void ContourGraph::CreateCTNodeObs(
+    const Point3D& pos, CTNodePtr& ctnode_ptr, const PolygonPtr& poly_ptr, const bool& is_pillar) {
     ctnode_ptr = std::make_shared<CTNode>();
     ctnode_ptr->position = pos;
     ctnode_ptr->front = NULL;
-    ctnode_ptr->back  = NULL;
+    ctnode_ptr->back = NULL;
     ctnode_ptr->is_global_match = false;
     ctnode_ptr->is_contour_necessary = false;
     ctnode_ptr->is_ground_associate = false;
@@ -381,8 +486,28 @@ void ContourGraph::CreateCTNode(const Point3D& pos, CTNodePtr& ctnode_ptr, const
     ctnode_ptr->poly_ptr = poly_ptr;
     ctnode_ptr->free_direct = is_pillar ? NodeFreeDirect::PILLAR : NodeFreeDirect::UNKNOW;
     ctnode_ptr->connect_nodes.clear();
+    // 此节点是障碍物
+    ctnode_ptr->terrain_type = TerrainType::TERRAIN_OBSTACLE;
 }
+// 创建其他类型的ct点
+void ContourGraph::CreatCTNodeTerrain(
+    const Point3D& pos, CTNodePtr& ctnode_ptr, const bool& is_pillar, TerrainType terrain_type) {
+    ctnode_ptr = std::make_shared<CTNode>();
+    ctnode_ptr->position = pos;
+    ctnode_ptr->front = NULL;
+    ctnode_ptr->back = NULL;
+    ctnode_ptr->is_global_match = false;
+    ctnode_ptr->is_contour_necessary = false;
+    ctnode_ptr->is_ground_associate = false;
+    ctnode_ptr->nav_node_id = 0;
+    ctnode_ptr->free_direct = is_pillar ? NodeFreeDirect::PILLAR : NodeFreeDirect::UNKNOW;
+    ctnode_ptr->connect_nodes.clear();
+    // 此节点是障碍物
+    ctnode_ptr->terrain_type = terrain_type;
 
+    MapHandler::GetGradientAtPosition(
+        ctnode_ptr->position, ctnode_ptr->gradient.x, ctnode_ptr->gradient.y, ctnode_ptr->slop);
+}
 void ContourGraph::CreatePolygon(const PointStack& poly_points, PolygonPtr& poly_ptr) {
     poly_ptr = std::make_shared<Polygon>();
     poly_ptr->N = poly_points.size();
@@ -397,24 +522,32 @@ NavNodePtr ContourGraph::NearestNavNodeForCTNode(const CTNodePtr& ctnode_ptr, co
     float nearest_dist = FARUtil::kINF;
     NavNodePtr nearest_node = NULL;
     float min_edist = FARUtil::kINF;
-    const float dir_thred = 0.5f; //cos(pi/3);
+    const float dir_thred = 0.5f;  // cos(pi/3);
     for (const auto& node_ptr : near_nodes) {
-        if (node_ptr->is_odom || node_ptr->is_navpoint || FARUtil::IsOutsideGoal(node_ptr) || !IsInMatchHeight(ctnode_ptr, node_ptr)) continue;
+        if (node_ptr->is_odom || node_ptr->is_navpoint || FARUtil::IsOutsideGoal(node_ptr) ||
+            !IsInMatchHeight(ctnode_ptr, node_ptr))
+            continue;
+        // [新增] 地形类型必须匹配
+        if (ctnode_ptr->terrain_type != node_ptr->terrain_type) {
+            continue;
+        }
+
         // no match with pillar to non-pillar local vertices
         if ((node_ptr->free_direct == NodeFreeDirect::PILLAR && ctnode_ptr->free_direct != NodeFreeDirect::PILLAR) ||
-            (ctnode_ptr->free_direct == NodeFreeDirect::PILLAR && node_ptr->free_direct != NodeFreeDirect::PILLAR)) 
-        {
+            (ctnode_ptr->free_direct == NodeFreeDirect::PILLAR && node_ptr->free_direct != NodeFreeDirect::PILLAR)) {
             continue;
         }
         float dist_thred = FARUtil::kMatchDist;
         float dir_score = 0.0f;
-        if (ctnode_ptr->free_direct != NodeFreeDirect::PILLAR && node_ptr->free_direct != NodeFreeDirect::UNKNOW && node_ptr->free_direct != NodeFreeDirect::PILLAR) {
+        if (ctnode_ptr->free_direct != NodeFreeDirect::PILLAR && node_ptr->free_direct != NodeFreeDirect::UNKNOW &&
+            node_ptr->free_direct != NodeFreeDirect::PILLAR) {
             if (ctnode_ptr->free_direct == node_ptr->free_direct) {
                 const Point3D topo_dir1 = FARUtil::SurfTopoDirect(node_ptr->surf_dirs);
                 const Point3D topo_dir2 = FARUtil::SurfTopoDirect(ctnode_ptr->surf_dirs);
                 dir_score = (topo_dir1 * topo_dir2 - dir_thred) / (1.0f - dir_thred);
             }
-        } else if (node_ptr->free_direct == NodeFreeDirect::PILLAR && ctnode_ptr->free_direct == NodeFreeDirect::PILLAR) {
+        } else if (node_ptr->free_direct == NodeFreeDirect::PILLAR &&
+                   ctnode_ptr->free_direct == NodeFreeDirect::PILLAR) {
             dir_score = 0.5f;
         }
         dist_thred *= dir_score;
@@ -435,11 +568,11 @@ NavNodePtr ContourGraph::NearestNavNodeForCTNode(const CTNodePtr& ctnode_ptr, co
     }
     return nearest_node;
 }
-
+// 分析ct点的表面方向和凹凸性
 void ContourGraph::AnalysisSurfAngleAndConvexity(const CTNodeStack& contour_graph) {
     for (const auto& ctnode_ptr : contour_graph) {
         if (ctnode_ptr->free_direct == NodeFreeDirect::PILLAR || ctnode_ptr->poly_ptr->is_pillar) {
-            ctnode_ptr->surf_dirs = {Point3D(0,0,-1), Point3D(0,0,-1)};
+            ctnode_ptr->surf_dirs = {Point3D(0, 0, -1), Point3D(0, 0, -1)};
             ctnode_ptr->poly_ptr->is_pillar = true;
             ctnode_ptr->free_direct = NodeFreeDirect::PILLAR;
         } else {
@@ -455,18 +588,19 @@ void ContourGraph::AnalysisSurfAngleAndConvexity(const CTNodeStack& contour_grap
                 end_p = next_ctnode->position;
                 edist = (end_p - ctnode_ptr->position).norm_flat();
             }
-            if (edist < FARUtil::kNavClearDist) { // This Node should be a pillar.
-                ctnode_ptr->surf_dirs = {Point3D(0,0,-1), Point3D(0,0,-1)};
+            if (edist < FARUtil::kNavClearDist) {  // This Node should be a pillar.
+                ctnode_ptr->surf_dirs = {Point3D(0, 0, -1), Point3D(0, 0, -1)};
                 ctnode_ptr->poly_ptr->is_pillar = true;
                 ctnode_ptr->free_direct = NodeFreeDirect::PILLAR;
                 continue;
             } else {
-                ctnode_ptr->surf_dirs.first = FARUtil::ContourSurfDirs(end_p, start_p, ctnode_ptr->position, FARUtil::kNavClearDist);
+                ctnode_ptr->surf_dirs.first =
+                    FARUtil::ContourSurfDirs(end_p, start_p, ctnode_ptr->position, FARUtil::kNavClearDist);
             }
             // back direction
             next_ctnode = ctnode_ptr->back;
             start_p = ctnode_ptr->position;
-            end_p   = next_ctnode->position;
+            end_p = next_ctnode->position;
             edist = (end_p - ctnode_ptr->position).norm_flat();
             while (next_ctnode != NULL && next_ctnode != ctnode_ptr && edist < FARUtil::kNavClearDist) {
                 next_ctnode = next_ctnode->back;
@@ -474,13 +608,14 @@ void ContourGraph::AnalysisSurfAngleAndConvexity(const CTNodeStack& contour_grap
                 end_p = next_ctnode->position;
                 edist = (end_p - ctnode_ptr->position).norm_flat();
             }
-            if (edist < FARUtil::kNavClearDist) { // This Node should be a pillar.
-                ctnode_ptr->surf_dirs = {Point3D(0,0,-1), Point3D(0,0,-1)}; // TODO!
+            if (edist < FARUtil::kNavClearDist) {                                // This Node should be a pillar.
+                ctnode_ptr->surf_dirs = {Point3D(0, 0, -1), Point3D(0, 0, -1)};  // TODO!
                 ctnode_ptr->poly_ptr->is_pillar = true;
                 ctnode_ptr->free_direct = NodeFreeDirect::PILLAR;
                 continue;
             } else {
-                ctnode_ptr->surf_dirs.second = FARUtil::ContourSurfDirs(end_p, start_p, ctnode_ptr->position, FARUtil::kNavClearDist);
+                ctnode_ptr->surf_dirs.second =
+                    FARUtil::ContourSurfDirs(end_p, start_p, ctnode_ptr->position, FARUtil::kNavClearDist);
             }
         }
         // analysis convexity (except pillar)
@@ -492,7 +627,7 @@ bool ContourGraph::IsAPillarPolygon(const PointStack& vertex_points, float& peri
     perimeter = 0.0f;
     if (vertex_points.size() < 3) return true;
     Point3D prev_p(vertex_points[0]);
-    for (std::size_t i=1; i<vertex_points.size(); i++) {
+    for (std::size_t i = 1; i < vertex_points.size(); i++) {
         const Point3D cur_p(vertex_points[i]);
         const float dist = std::hypotf(cur_p.x - prev_p.x, cur_p.y - prev_p.y);
         perimeter += dist;
@@ -512,9 +647,9 @@ bool ContourGraph::IsEdgeCollideSegment(const PointPair& line, const ConnectPair
 
 bool ContourGraph::IsEdgeCollidePoly(const PointStack& poly, const ConnectPair& edge) {
     const int N = poly.size();
-    if (N < 3) cout<<"Poly vertex size less than 3."<<endl;
-    for (int i=0; i<N; i++) {
-        const PointPair line(poly[i], poly[FARUtil::Mod(i+1, N)]);
+    if (N < 3) cout << "Poly vertex size less than 3." << endl;
+    for (int i = 0; i < N; i++) {
+        const PointPair line(poly[i], poly[FARUtil::Mod(i + 1, N)]);
         if (ContourGraph::IsEdgeCollideSegment(line, edge)) {
             return true;
         }
@@ -523,8 +658,9 @@ bool ContourGraph::IsEdgeCollidePoly(const PointStack& poly, const ConnectPair& 
 }
 
 void ContourGraph::AnalysisConvexityOfCTNode(const CTNodePtr& ctnode_ptr) {
-    if (ctnode_ptr->surf_dirs.first  == Point3D(0,0,-1) || ctnode_ptr->surf_dirs.second == Point3D(0,0,-1) || ctnode_ptr->poly_ptr->is_pillar) {
-        ctnode_ptr->surf_dirs.first = Point3D(0,0,-1), ctnode_ptr->surf_dirs.second == Point3D(0,0,-1);
+    if (ctnode_ptr->surf_dirs.first == Point3D(0, 0, -1) || ctnode_ptr->surf_dirs.second == Point3D(0, 0, -1) ||
+        ctnode_ptr->poly_ptr->is_pillar) {
+        ctnode_ptr->surf_dirs.first = Point3D(0, 0, -1), ctnode_ptr->surf_dirs.second == Point3D(0, 0, -1);
         ctnode_ptr->poly_ptr->is_pillar = true;
         ctnode_ptr->free_direct = NodeFreeDirect::PILLAR;
         return;
@@ -548,7 +684,8 @@ bool ContourGraph::ReprojectPointOutsidePolygons(Point3D& point, const float& fr
     bool is_inside_poly = false;
     for (const auto& poly_ptr : ContourGraph::contour_polygons_) {
         if (poly_ptr->is_pillar) continue;
-        if (FARUtil::PointInsideAPoly(poly_ptr->vertices, point) && !FARUtil::PointInsideAPoly(poly_ptr->vertices, FARUtil::free_odom_p)) {
+        if (FARUtil::PointInsideAPoly(poly_ptr->vertices, point) &&
+            !FARUtil::PointInsideAPoly(poly_ptr->vertices, FARUtil::free_odom_p)) {
             inside_poly_ptr = poly_ptr;
             is_inside_poly = true;
             break;
@@ -557,16 +694,17 @@ bool ContourGraph::ReprojectPointOutsidePolygons(Point3D& point, const float& fr
     if (is_inside_poly) {
         float near_dist = FARUtil::kINF;
         Point3D reproject_p = point;
-        Point3D free_dir(0,0,-1);
+        Point3D free_dir(0, 0, -1);
         const int N = inside_poly_ptr->vertices.size();
-        for (int idx=0; idx<N; idx++) {
+        for (int idx = 0; idx < N; idx++) {
             const Point3D vertex = inside_poly_ptr->vertices[idx];
             const float temp_dist = (vertex - point).norm_flat();
             if (temp_dist < near_dist) {
-                const Point3D dir1 = (inside_poly_ptr->vertices[FARUtil::Mod(idx-1, N)] - vertex).normalize_flat();
-                const Point3D dir2 = (inside_poly_ptr->vertices[FARUtil::Mod(idx+1, N)] - vertex).normalize_flat();
+                const Point3D dir1 = (inside_poly_ptr->vertices[FARUtil::Mod(idx - 1, N)] - vertex).normalize_flat();
+                const Point3D dir2 = (inside_poly_ptr->vertices[FARUtil::Mod(idx + 1, N)] - vertex).normalize_flat();
                 const Point3D dir = (dir1 + dir2).normalize_flat();
-                if (FARUtil::PointInsideAPoly(inside_poly_ptr->vertices, vertex + dir * FARUtil::kLeafSize)) { // convex 
+                if (FARUtil::PointInsideAPoly(
+                        inside_poly_ptr->vertices, vertex + dir * FARUtil::kLeafSize)) {  // convex
                     reproject_p = vertex;
                     near_dist = temp_dist;
                     free_dir = dir;
@@ -619,7 +757,7 @@ void ContourGraph::ExtractGlobalContours() {
                     unmatched_pair.first = edge.first->ctnode->position;
                 } else if (edge.second->is_contour_match) {
                     unmatched_pair.second = edge.second->ctnode->position;
-                } 
+                }
                 ContourGraph::unmatched_contour_.push_back(unmatched_pair);
             }
         }
@@ -639,7 +777,7 @@ void ContourGraph::ExtractGlobalContours() {
 
 bool ContourGraph::IsValidBoundary(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, bool& is_new) {
     is_new = true;
-    if (node_ptr1->invalid_boundary.find(node_ptr2->id) != node_ptr1->invalid_boundary.end()) { // already invalid
+    if (node_ptr1->invalid_boundary.find(node_ptr2->id) != node_ptr1->invalid_boundary.end()) {  // already invalid
         is_new = false;
         return false;
     }
@@ -690,29 +828,32 @@ void ContourGraph::UpdateOdomFreePosition(const NavNodePtr& odom_ptr, Point3D& g
 ConnectPair ContourGraph::ReprojectEdge(const CTNodePtr& ctnode_ptr1, const NavNodePtr& node_ptr2, const float& dist) {
     ConnectPair edgeOut;
     const float ndist = (ctnode_ptr1->position - node_ptr2->position).norm_flat();
-    const float ref_dist = std::min(ndist*0.4f, dist);
+    const float ref_dist = std::min(ndist * 0.4f, dist);
 
-    edgeOut.start_p = ProjectNode(ctnode_ptr1, ref_dist); // node 1
-    edgeOut.end_p   = ProjectNode(node_ptr2, ref_dist);   // node 2
+    edgeOut.start_p = ProjectNode(ctnode_ptr1, ref_dist);  // node 1
+    edgeOut.end_p = ProjectNode(node_ptr2, ref_dist);      // node 2
 
     return edgeOut;
 }
 
-ConnectPair ContourGraph::ReprojectEdge(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, const float& dist, const bool& is_global_check) {
+ConnectPair ContourGraph::ReprojectEdge(
+    const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, const float& dist, const bool& is_global_check) {
     ConnectPair edgeOut;
     const float ndist = (node_ptr1->position - node_ptr2->position).norm_flat();
-    const float ref_dist = std::min(ndist*0.4f, dist);
+    const float ref_dist = std::min(ndist * 0.4f, dist);
     // node 1
-    if (!is_global_check && node_ptr1->is_contour_match && node_ptr1->ctnode->free_direct == node_ptr1->free_direct) { // node 1
+    if (!is_global_check && node_ptr1->is_contour_match &&
+        node_ptr1->ctnode->free_direct == node_ptr1->free_direct) {  // node 1
         const auto ctnode1 = node_ptr1->ctnode;
-        edgeOut.start_p = ProjectNode(ctnode1, ref_dist); // node 1
+        edgeOut.start_p = ProjectNode(ctnode1, ref_dist);  // node 1
     } else {
-        edgeOut.start_p = ProjectNode(node_ptr1, ref_dist); // node 1
+        edgeOut.start_p = ProjectNode(node_ptr1, ref_dist);  // node 1
     }
     // node 2
-    if (!is_global_check && node_ptr2->is_contour_match && node_ptr2->ctnode->free_direct == node_ptr2->free_direct) { // node 2
+    if (!is_global_check && node_ptr2->is_contour_match &&
+        node_ptr2->ctnode->free_direct == node_ptr2->free_direct) {  // node 2
         const auto ctnode2 = node_ptr2->ctnode;
-        edgeOut.end_p = ProjectNode(ctnode2, ref_dist); // node 1
+        edgeOut.end_p = ProjectNode(ctnode2, ref_dist);  // node 1
     } else {
         edgeOut.end_p = ProjectNode(node_ptr2, ref_dist);
     }
@@ -727,6 +868,4 @@ void ContourGraph::ResetCurrentContour() {
 
     odom_node_ptr_ = NULL;
     is_robot_inside_poly_ = false;
-}   
-
-
+}
