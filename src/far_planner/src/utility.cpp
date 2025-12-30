@@ -734,7 +734,7 @@ void FARUtil::CropBoxCloud(
     boxFilter.filter(cropBox_cloud);
     *cloudInOut = cropBox_cloud;
 }
-
+// 判断cur_p(第三个参数)是否在第一二个点定义的圆柱体内部
 bool FARUtil::IsInCylinder(const Point3D& from_p, const Point3D& end_p, const Point3D& cur_p,
     const float& radius, const bool& is_2D) {
     const Point3D unit_axial =

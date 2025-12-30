@@ -45,7 +45,7 @@ private:
      * 半径2.5m
      *  */
     NodePtrStack internav_near_nodes_, surround_internav_nodes_;
-    NodePtrStack out_contour_nodes_;
+    NodePtrStack out_contour_nodes_;  // 超出范围但仍可见的轮廓节点
     float CONNECT_ANGLE_COS, NOISE_ANGLE_COS;
     bool is_bridge_internav_ = false;
     Point3D last_connect_pos_;
@@ -303,7 +303,7 @@ private:
         }
         return false;
     }
-
+    // 建立轮廓连接 contour_connects
     static inline void AddContourConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
         if (!FARUtil::IsTypeInStack(node_ptr1, node_ptr2->contour_connects) &&
             !FARUtil::IsTypeInStack(node_ptr2, node_ptr1->contour_connects)) {
@@ -312,7 +312,7 @@ private:
             ContourGraph::AddContourToSets(node_ptr1, node_ptr2);
         }
     }
-
+    // 清理轮廓连接 contour_connects
     static inline bool DeleteContourConnect(
         const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
         if (!FARUtil::IsTypeInStack(node_ptr1, node_ptr2->contour_connects)) return false;
@@ -494,6 +494,7 @@ private:
     }
 
     // 判断from到to的点是否可以连接
+    // 去除对称约束  不对称约束在成本逻辑里处理
     inline bool IsConnectSteep(const NavNodePtr& from_node, const NavNodePtr& to_node) {
         if (from_node == nullptr || to_node == nullptr) return false;
         // 连接方向（xy平面单位向量）
@@ -505,7 +506,7 @@ private:
         // 你可以根据需要返回cos值，也可以判断阈值
         if (abs(cos_theta) < 0.3) return false;
         // 2. 直上 (Power): 正数且太大 -> 砍
-        if (cos_theta > 0.95) return false;
+        // if (cos_theta > 0.95) return false;
         // 3. 直下 & 斜切 -> 保留
         return true;
     }
@@ -664,7 +665,7 @@ public:
         // Assign Global Unique ID
         AssignGlobalNodeID(node_ptr);
     }
-
+    // 清空connect_nodes，poly_connects，potential_edges以及edge_votes
     static inline void ClearNodeConnectInGraph(const NavNodePtr& node_ptr) {
         if (node_ptr == NULL) return;
         // clear navigation connections
@@ -700,7 +701,7 @@ public:
             ROS_WARN_THROTTLE(1.0, "DG: exist new node pointer is NULL, fails to add into graph");
         }
     }
-
+    // 添加到poly_connects 相互的
     static inline void AddPolyEdge(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
         if (node_ptr1 == node_ptr2) return;
         if (!FARUtil::IsTypeInStack(node_ptr2, node_ptr1->poly_connects) &&
@@ -718,6 +719,7 @@ public:
     }
 
     /* Add edge for given two navigation nodes */
+    // 添加到connect_nodes  相互的
     static inline void AddEdge(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
         if (node_ptr1 == node_ptr2) return;
         if (!FARUtil::IsTypeInStack(node_ptr2, node_ptr1->connect_nodes) &&

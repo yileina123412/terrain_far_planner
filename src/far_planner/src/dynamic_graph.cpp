@@ -155,6 +155,7 @@ void DynamicGraph::UpdateNavGraph(
     // 把新点加入有效检查列表中
     codom_check_list.insert(
         codom_check_list.end(), new_nodes.begin(), new_nodes.end());  // add new nodes to check list
+
     // 检查odom点的连接
     for (const auto& conode_ptr : codom_check_list) {
         if (conode_ptr->is_odom) continue;
@@ -162,16 +163,20 @@ void DynamicGraph::UpdateNavGraph(
         // odom不进行轮廓连接判断
         if (this->IsValidConnect(odom_node_ptr_, conode_ptr, false) &&
             this->ConnectOdomSteep(odom_node_ptr_, conode_ptr)) {
+            // 添加到poly_connects  相互的
             this->AddPolyEdge(odom_node_ptr_, conode_ptr),
+                // 添加到connect_nodes 相互的
                 this->AddEdge(odom_node_ptr_, conode_ptr);
         } else {
             this->ErasePolyEdge(odom_node_ptr_, conode_ptr),
                 this->EraseEdge(conode_ptr, odom_node_ptr_);
         }
     }
+
     if (!is_freeze_vgraph) {
         // Adding new nodes to near nodes stack
-        // 把新点加入导航图，以及near_nav_nodes_
+        // 把新点加入导航图，以及near_nav_nodes_ 更新cur_internav_ptr_，并建立轨迹连接
+        // 和last_internav_ptr_
         for (const auto& new_node_ptr : new_nodes) {
             this->AddNodeToGraph(new_node_ptr);
             new_node_ptr->is_near_nodes = true;
@@ -183,6 +188,7 @@ void DynamicGraph::UpdateNavGraph(
                 ContourGraph::MatchCTNodeWithNavNode(new_node_ptr->ctnode, new_node_ptr);
             }
         }
+
         // connect outrange contour nodes
         for (const auto& out_node_ptr : out_contour_nodes_) {
             const NavNodePtr matched_node =
@@ -198,48 +204,64 @@ void DynamicGraph::UpdateNavGraph(
                 }
             }
         }
+
         // reconnect between near nodes
         // 连接near_nav_nodes_之间的边
-        NodePtrStack outside_break_nodes;
+
+        NodePtrStack outside_break_nodes;  // 存储失去连接的外围节点
         for (std::size_t i = 0; i < near_nav_nodes_.size(); i++) {
             const NavNodePtr nav_ptr1 = near_nav_nodes_[i];
             if (nav_ptr1->is_odom) continue;
             // re-evaluate nodes which are not in near
+            // 复制连接节点列表（避免迭代中修改）
             const NodePtrStack copy_connect_nodes = nav_ptr1->connect_nodes;
+            // 遍历near_nav_nodes_的connect_nodes连接节点
             for (const auto& cnode : copy_connect_nodes) {
+                // 跳过不需要重新评估的节点
                 if (cnode->is_odom || cnode->is_near_nodes || FARUtil::IsOutsideGoal(cnode) ||
                     FARUtil::IsTypeInStack(cnode, nav_ptr1->contour_connects))
                     continue;
-                if (this->IsValidConnect(nav_ptr1, cnode, false)) {
+                // 重新评估near_nav_nodes_和connect_nodes的多边形连接
+                if (this->IsValidConnect(nav_ptr1, cnode, false) &&
+                    this->ConnectOdomSteep(nav_ptr1, cnode)) {
                     this->AddPolyEdge(nav_ptr1, cnode), this->AddEdge(nav_ptr1, cnode);
                 } else {
                     this->ErasePolyEdge(nav_ptr1, cnode), this->EraseEdge(nav_ptr1, cnode);
                     outside_break_nodes.push_back(cnode);
                 }
             }
+            // 近距离节点near_nav_nodes_间的连接
             for (std::size_t j = 0; j < near_nav_nodes_.size(); j++) {
                 const NavNodePtr nav_ptr2 = near_nav_nodes_[j];
                 if (i == j || j > i || nav_ptr2->is_odom) continue;
-                if (this->IsValidConnect(nav_ptr1, nav_ptr2, true)) {
+                // 启用轮廓连接检查
+                if (this->IsValidConnect(nav_ptr1, nav_ptr2, true) &&
+                    this->ConnectOdomSteep(nav_ptr1, nav_ptr2)) {
                     this->AddPolyEdge(nav_ptr1, nav_ptr2), this->AddEdge(nav_ptr1, nav_ptr2);
                 } else {
                     this->ErasePolyEdge(nav_ptr1, nav_ptr2), this->EraseEdge(nav_ptr1, nav_ptr2);
                 }
             }
+            // 处理超出范围的轮廓节点连接
             for (const auto& oc_node_ptr : out_contour_nodes_) {
+                // 只处理已匹配轮廓的节点
                 if (!oc_node_ptr->is_contour_match || !nav_ptr1->is_contour_match) continue;
+                // / 检查是否可以通过轮廓结构连接
                 if (ContourGraph::IsNavNodesConnectFromContour(nav_ptr1, oc_node_ptr)) {
+                    // contour_votes投一票
                     this->RecordContourVote(nav_ptr1, oc_node_ptr);
                 } else {
                     this->DeleteContourVote(nav_ptr1, oc_node_ptr);
                 }
             }
+            // 选择最优轮廓连接：从所有轮廓投票中，只保留得票最高的前两个连接。
             this->TopTwoContourConnector(nav_ptr1);
         }
         // update out range break nodes connects
         for (const auto& node_ptr : near_nav_nodes_) {
             for (const auto& ob_node_ptr : outside_break_nodes) {
-                if (this->IsValidConnect(node_ptr, ob_node_ptr, false)) {
+                if (this->IsValidConnect(node_ptr, ob_node_ptr, false) &&
+                    this->ConnectOdomSteep(node_ptr, ob_node_ptr)) {
                     this->AddPolyEdge(node_ptr, ob_node_ptr), this->AddEdge(node_ptr, ob_node_ptr);
                 } else {
                     this->ErasePolyEdge(node_ptr, ob_node_ptr),
@@ -295,6 +317,7 @@ bool DynamicGraph::IsValidConnect(
         if (this->IsBoundaryConnect(node_ptr1, node_ptr2) ||
             (ContourGraph::IsNavNodesConnectFromContour(node_ptr1, node_ptr2) &&
                 IsOnTerrainConnect(node_ptr1, node_ptr2, true))) {
+            // contour_votes +1
             this->RecordContourVote(node_ptr1, node_ptr2);
         } else if (node_ptr1->is_contour_match && node_ptr2->is_contour_match) {
             this->DeleteContourVote(node_ptr1, node_ptr2);
@@ -314,6 +337,7 @@ bool DynamicGraph::IsValidConnect(
         IsOnTerrainConnect(node_ptr1, node_ptr2, false)) {
         // 检查是否有资格多边形连接
         if (this->IsPolyMatchedForConnect(node_ptr1, node_ptr2)) {
+            // edge_votes+1   potential_edges
             RecordPolygonVote(node_ptr1, node_ptr2, vote_queue_size);
         }
     } else {
@@ -336,7 +360,9 @@ bool DynamicGraph::IsValidConnect(
     // 轨迹连接检查 不需要投票  如果多边形连接失败
     if (!is_connect) {
         if (FARUtil::IsTypeInStack(node_ptr1, node_ptr2->trajectory_connects)) is_connect = true;
+        // 如果其中一个是里程计节点，并且cur_internav_ptr_没有，表示刚起步
         if ((node_ptr1->is_odom || node_ptr2->is_odom) && cur_internav_ptr_ != NULL) {
+            // 如果其中一个是cur_internav_ptr_的轨迹连接
             if (node_ptr1->is_odom &&
                 FARUtil::IsTypeInStack(node_ptr2, cur_internav_ptr_->trajectory_connects)) {
                 if (FARUtil::IsInCylinder(cur_internav_ptr_->position, node_ptr2->position,
@@ -355,10 +381,14 @@ bool DynamicGraph::IsValidConnect(
 
     // 紧密区域轮廓连接
     /* check for additional contour connection through tight area from current robot position */
+    // 即使多边形连接和轨迹连接都失败了，仍然尝试通过轮廓结构建立里程计节点（机器人位置）与导航节点之间的连接。
     if (!is_connect && (node_ptr1->is_odom || node_ptr2->is_odom) &&
         IsConvexConnect(node_ptr1, node_ptr2) && this->IsInDirectConstraint(node_ptr1, node_ptr2)) {
+        // 如果node_ptr1是里程计节点
         if (node_ptr1->is_odom && !node_ptr2->contour_connects.empty()) {
+            // 遍历 node_ptr2 的所有轮廓连接点
             for (const auto& ctnode_ptr : node_ptr2->contour_connects) {
+                // 检查轮廓点是否在圆柱体内
                 if (FARUtil::IsInCylinder(ctnode_ptr->position, node_ptr2->position,
                         node_ptr1->position, FARUtil::kNavClearDist)) {
                     is_connect = true;
@@ -491,7 +521,7 @@ bool DynamicGraph::IsSimilarConnectInDiection(
     }
     return false;
 }
-// 两点连接是否会碰到障碍物，是否可行  可行：true
+// 两点连接是否会碰到障碍物，是否可行  可行：true 双向检查  但是这个是障碍物的，双向通用
 bool DynamicGraph::IsInDirectConstraint(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
     // check for odom -> frontier connections
     if ((node_ptr1->is_odom && node_ptr2->is_frontier) ||
@@ -646,7 +676,7 @@ void DynamicGraph::ReEvaluateConvexity(const NavNodePtr& node_ptr) {
         }
     }
 }
-
+// 建立轮廓连接
 void DynamicGraph::TopTwoContourConnector(const NavNodePtr& node_ptr) {
     std::vector<int> votesc;
     for (const auto& vote : node_ptr->contour_votes) {
@@ -824,6 +854,7 @@ void DynamicGraph::DeleteContourVote(const NavNodePtr& node_ptr1, const NavNodeP
 }
 // 判断一个点是否应该被激活is_active
 bool DynamicGraph::IsActivateNavNode(const NavNodePtr& node_ptr) {
+    // 1. 如果节点已经激活，直接返回 true
     if (node_ptr->is_active) return true;
     if (FARUtil::IsPointNearNewPoints(node_ptr->position, true)) {
         node_ptr->is_active = true;

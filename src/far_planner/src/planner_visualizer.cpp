@@ -21,12 +21,14 @@ void DPVisualizer::Init(const ros::NodeHandle& nh) {
     viz_view_extend = nh_.advertise<MarkerArray>("/viz_viewpoint_extend_topic", 5);
 
     viz_steep_clusters_pub_ = nh_.advertise<MarkerArray>("/viz_steep_clusters_topic", 5);
-    viz_moderate_clusters_pub_ = nh_.advertise<MarkerArray>("/viz_moderate_clusters_topic", 5);  // [新增]
-    viz_obstacle_clusters_pub_ = nh_.advertise<MarkerArray>("/viz_obstacle_clusters_topic", 5);  // [新增] 障碍物聚类
+    viz_moderate_clusters_pub_ =
+        nh_.advertise<MarkerArray>("/viz_moderate_clusters_topic", 5);  // [新增]
+    viz_obstacle_clusters_pub_ =
+        nh_.advertise<MarkerArray>("/viz_obstacle_clusters_topic", 5);  // [新增] 障碍物聚类
 }
 
-void DPVisualizer::VizNodes(const NodePtrStack& node_stack, const std::string& ns, const VizColor& color,
-    const float scale, const float alpha) {
+void DPVisualizer::VizNodes(const NodePtrStack& node_stack, const std::string& ns,
+    const VizColor& color, const float scale, const float alpha) {
     Marker node_marker;
     node_marker.type = Marker::SPHERE_LIST;
     this->SetMarker(color, ns, scale, alpha, node_marker);
@@ -41,8 +43,8 @@ void DPVisualizer::VizNodes(const NodePtrStack& node_stack, const std::string& n
     viz_node_pub_.publish(node_marker);
 }
 
-void DPVisualizer::VizPoint3D(
-    const Point3D& point, const std::string& ns, const VizColor& color, const float scale, const float alpha) {
+void DPVisualizer::VizPoint3D(const Point3D& point, const std::string& ns, const VizColor& color,
+    const float scale, const float alpha) {
     Marker node_marker;
     node_marker.type = Marker::SPHERE;
     this->SetMarker(color, ns, scale, alpha, node_marker);
@@ -212,13 +214,33 @@ void DPVisualizer::VizContourGraph(const CTNodeStack& contour_graph) {
     contour_marker_array.markers.push_back(contour_helper_marker);
     viz_contour_pub_.publish(contour_marker_array);
 }
+/**
+ * // 7种不同状态的节点，用不同颜色区分：
+- nav_node_marker        (白色)   - 全局顶点，所有顶点
+- unfinal_node_marker    (红色)   - 更新中的顶点（未最终确定） ！is_finalized
+- near_node_marker       (品红色) - 局部范围内的顶点     is_near_nodes
+- covered_node_marker    (蓝色)   - 自由空间顶点（已覆盖）    is_covered
+- internav_node_marker   (黄色)   - 轨迹顶点   is_navpoint的点
+- boundary_node_marker   (绿色)   - 边界顶点
+- frontier_node_marker   (橙色)   - 前沿顶点   is_frontier
+// 8种不同类型的连接：
+- edge_marker           (白色)   - 全局可导航图
+- visual_edge_marker    (翠绿色) - 可见性边
+- free_edge_marker      (翠绿色) - 自由空间图边
+- contour_edge_marker   (红色)   - 多边形边
+- boundary_edge_marker  (橙色)   - 边界边
+- odom_edge_marker      (橙色)   - 里程计边
+- goal_edge_marker      (黄色)   - 到目标的边
+- traj_edge_marker      (绿色)   - 轨迹边
+ */
 
 void DPVisualizer::VizGraph(const NodePtrStack& graph) {
     MarkerArray graph_marker_array;
-    Marker nav_node_marker, unfinal_node_marker, near_node_marker, covered_node_marker, internav_node_marker,
-        frontier_node_marker, edge_marker, visual_edge_marker, contour_edge_marker, free_edge_marker, odom_edge_marker,
-        goal_edge_marker, traj_edge_marker, corner_surf_marker, contour_align_marker, corner_helper_marker,
-        boundary_node_marker, boundary_edge_marker;
+    Marker nav_node_marker, unfinal_node_marker, near_node_marker, covered_node_marker,
+        internav_node_marker, frontier_node_marker, edge_marker, visual_edge_marker,
+        contour_edge_marker, free_edge_marker, odom_edge_marker, goal_edge_marker, traj_edge_marker,
+        corner_surf_marker, contour_align_marker, corner_helper_marker, boundary_node_marker,
+        boundary_edge_marker;
     nav_node_marker.type = Marker::SPHERE_LIST;
     unfinal_node_marker.type = Marker::SPHERE_LIST;
     near_node_marker.type = Marker::SPHERE_LIST;
@@ -387,14 +409,16 @@ void DPVisualizer::VizGraph(const NodePtrStack& graph) {
     viz_graph_pub_.publish(graph_marker_array);
 }
 
-void DPVisualizer::VizMapGrids(const PointStack& neighbor_centers, const PointStack& occupancy_centers,
-    const float& ceil_length, const float& ceil_height) {
+void DPVisualizer::VizMapGrids(const PointStack& neighbor_centers,
+    const PointStack& occupancy_centers, const float& ceil_length, const float& ceil_height) {
     MarkerArray map_grid_marker_array;
     Marker neighbor_marker, occupancy_marker;
     neighbor_marker.type = Marker::CUBE_LIST;
     occupancy_marker.type = Marker::CUBE_LIST;
-    this->SetMarker(VizColor::GREEN, "neighbor_grids", ceil_length / FARUtil::kVizRatio, 0.3f, neighbor_marker);
-    this->SetMarker(VizColor::RED, "occupancy_grids", ceil_length / FARUtil::kVizRatio, 0.2f, occupancy_marker);
+    this->SetMarker(
+        VizColor::GREEN, "neighbor_grids", ceil_length / FARUtil::kVizRatio, 0.3f, neighbor_marker);
+    this->SetMarker(
+        VizColor::RED, "occupancy_grids", ceil_length / FARUtil::kVizRatio, 0.2f, occupancy_marker);
     neighbor_marker.scale.z = occupancy_marker.scale.z = ceil_height;
     const std::size_t N1 = neighbor_centers.size();
     const std::size_t N2 = occupancy_centers.size();
@@ -412,8 +436,8 @@ void DPVisualizer::VizMapGrids(const PointStack& neighbor_centers, const PointSt
     viz_map_pub_.publish(map_grid_marker_array);
 }
 
-void DPVisualizer::SetMarker(const VizColor& color, const std::string& ns, const float& scale, const float& alpha,
-    Marker& scan_marker, const float& scale_ratio) {
+void DPVisualizer::SetMarker(const VizColor& color, const std::string& ns, const float& scale,
+    const float& alpha, Marker& scan_marker, const float& scale_ratio) {
     scan_marker.header.frame_id = FARUtil::worldFrameId;
     scan_marker.header.stamp = ros::Time::now();
     scan_marker.id = 0;
@@ -465,7 +489,8 @@ void DPVisualizer::SetColor(const VizColor& color, const float& alpha, Marker& s
     scan_marker.color = c;
 }
 
-void DPVisualizer::VizRGBPointCloud(const ros::Publisher& viz_pub, const pcl::PointCloud<pcl::PointXYZRGB>::Ptr& pc) {
+void DPVisualizer::VizRGBPointCloud(
+    const ros::Publisher& viz_pub, const pcl::PointCloud<pcl::PointXYZRGB>::Ptr& pc) {
     sensor_msgs::PointCloud2 msg_pc;
     pcl::toROSMsg(*pc, msg_pc);
     msg_pc.header.frame_id = FARUtil::worldFrameId;
@@ -473,8 +498,8 @@ void DPVisualizer::VizRGBPointCloud(const ros::Publisher& viz_pub, const pcl::Po
     viz_pub.publish(msg_pc);
 }
 
-void DPVisualizer::VizSteepSlopeClusters(
-    const std::vector<PointStack>& boundary_clusters, const std::vector<PointStack>& inner_clusters) {
+void DPVisualizer::VizSteepSlopeClusters(const std::vector<PointStack>& boundary_clusters,
+    const std::vector<PointStack>& inner_clusters) {
     if (boundary_clusters.empty() || inner_clusters.empty()) {
         ROS_WARN("Viz: No steep slope clusters to visualize");
         return;
@@ -483,8 +508,9 @@ void DPVisualizer::VizSteepSlopeClusters(
     MarkerArray cluster_marker_array;
 
     // 定义颜色循环（最多支持10种颜色）
-    std::vector<VizColor> colors = {VizColor::RED, VizColor::BLUE, VizColor::GREEN, VizColor::YELLOW, VizColor::MAGNA,
-        VizColor::ORANGE, VizColor::EMERALD, VizColor::PURPLE, VizColor::WHITE};
+    std::vector<VizColor> colors = {VizColor::RED, VizColor::BLUE, VizColor::GREEN,
+        VizColor::YELLOW, VizColor::MAGNA, VizColor::ORANGE, VizColor::EMERALD, VizColor::PURPLE,
+        VizColor::WHITE};
 
     // 遍历每个聚类
     for (size_t i = 0; i < boundary_clusters.size(); i++) {
@@ -522,7 +548,8 @@ void DPVisualizer::VizSteepSlopeClusters(
             cluster_marker_array.markers.push_back(inner_marker);
         }
 
-        // ROS_INFO("Viz: Cluster %lu - boundary: %lu points (spheres), inner: %lu points (cubes)", i,
+        // ROS_INFO("Viz: Cluster %lu - boundary: %lu points (spheres), inner: %lu points (cubes)",
+        // i,
         //     boundary_clusters[i].size(), inner_clusters[i].size());
     }
 
@@ -532,8 +559,8 @@ void DPVisualizer::VizSteepSlopeClusters(
     // ROS_INFO("Viz: Published %lu steep slope clusters", boundary_clusters.size());
 }
 
-void DPVisualizer::VizModerateSlopeClusters(
-    const std::vector<PointStack>& boundary_clusters, const std::vector<PointStack>& inner_clusters) {
+void DPVisualizer::VizModerateSlopeClusters(const std::vector<PointStack>& boundary_clusters,
+    const std::vector<PointStack>& inner_clusters) {
     // if (boundary_clusters.empty() || inner_clusters.empty()) {
     //     ROS_WARN("Viz: No moderate slope clusters to visualize");
     //     return;
@@ -542,8 +569,8 @@ void DPVisualizer::VizModerateSlopeClusters(
     MarkerArray cluster_marker_array;
 
     // 定义颜色循环（与陡坡不同的配色方案）
-    std::vector<VizColor> colors = {VizColor::GREEN, VizColor::YELLOW, VizColor::EMERALD, VizColor::ORANGE,
-        VizColor::PURPLE, VizColor::MAGNA, VizColor::RED, VizColor::WHITE};
+    std::vector<VizColor> colors = {VizColor::GREEN, VizColor::YELLOW, VizColor::EMERALD,
+        VizColor::ORANGE, VizColor::PURPLE, VizColor::MAGNA, VizColor::RED, VizColor::WHITE};
 
     // 遍历每个聚类
     for (size_t i = 0; i < inner_clusters.size(); i++) {
@@ -581,7 +608,8 @@ void DPVisualizer::VizModerateSlopeClusters(
             cluster_marker_array.markers.push_back(inner_marker);
         }
 
-        // ROS_INFO("Viz: Moderate cluster %lu - boundary: %lu points (cylinders), inner: %lu points (cubes)", i,
+        // ROS_INFO("Viz: Moderate cluster %lu - boundary: %lu points (cylinders), inner: %lu points
+        // (cubes)", i,
         //     boundary_clusters[i].size(), inner_clusters[i].size());
     }
 
@@ -600,8 +628,8 @@ void DPVisualizer::VizObstacleClusters(const std::vector<PointStack>& boundary_c
     MarkerArray cluster_marker_array;
 
     // 定义颜色循环（使用红色系配色方案，突出障碍物）
-    std::vector<VizColor> colors = {VizColor::RED, VizColor::ORANGE, VizColor::MAGNA, VizColor::YELLOW,
-        VizColor::PURPLE, VizColor::WHITE, VizColor::BLUE};
+    std::vector<VizColor> colors = {VizColor::RED, VizColor::ORANGE, VizColor::MAGNA,
+        VizColor::YELLOW, VizColor::PURPLE, VizColor::WHITE, VizColor::BLUE};
 
     // 遍历每个聚类
     for (size_t i = 0; i < boundary_clusters.size(); i++) {
@@ -624,7 +652,8 @@ void DPVisualizer::VizObstacleClusters(const std::vector<PointStack>& boundary_c
             cluster_marker_array.markers.push_back(boundary_marker);
         }
 
-        // ROS_INFO("Viz: Obstacle cluster %lu - boundary: %lu points (cubes)", i, boundary_clusters[i].size());
+        // ROS_INFO("Viz: Obstacle cluster %lu - boundary: %lu points (cubes)", i,
+        // boundary_clusters[i].size());
     }
 
     // 发布可视化

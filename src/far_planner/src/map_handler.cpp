@@ -413,27 +413,28 @@ void MapHandler::AdjustCTNodeHeight(const CTNodeStack& ctnodes) {
         }
     }
 }
-
+// 根据地形高度信息，筛选出真正属于障碍物邻域的网格索引，把原始障碍物邻居集合（neighbor_obs）进一步过滤，只保留那些在地形高度上合理的网格
 void MapHandler::ObsNeighborCloudWithTerrain(
     std::unordered_set<int>& neighbor_obs, std::unordered_set<int>& extend_terrain_obs) {
     std::unordered_set<int> neighbor_copy = neighbor_obs;
-    neighbor_obs.clear();
-    const float R = map_params_.cell_length * 0.7071f;  // sqrt(2)/2
-    for (const auto& idx : neighbor_copy) {
-        const Point3D pos = Point3D(world_obs_cloud_grid_->Ind2Pos(idx));
-        const Eigen::Vector3i sub =
-            terrain_height_grid_->Pos2Sub(Eigen::Vector3d(pos.x, pos.y, 0.0f));
-        const int terrain_ind = terrain_height_grid_->Sub2Ind(sub);
-        bool inRange = false;
-        float minH, maxH;
-        const float avgH = NearestHeightOfRadius(pos, R, minH, maxH, inRange);
-        if (inRange && pos.z + map_params_.cell_height > minH &&
-            pos.z - map_params_.cell_height <
-                maxH + FARUtil::kTolerZ)  // use map_params_.cell_height/2.0 as a tolerance margin
-        {
-            neighbor_obs.insert(idx);
-        }
-    }
+    // neighbor_obs.clear();
+    // const float R = map_params_.cell_length * 0.7071f;  // sqrt(2)/2
+    // for (const auto& idx : neighbor_copy) {
+    //     const Point3D pos = Point3D(world_obs_cloud_grid_->Ind2Pos(idx));
+    //     const Eigen::Vector3i sub =
+    //         terrain_height_grid_->Pos2Sub(Eigen::Vector3d(pos.x, pos.y, 0.0f));
+    //     const int terrain_ind = terrain_height_grid_->Sub2Ind(sub);
+    //     bool inRange = false;
+    //     float minH, maxH;
+    //     const float avgH = NearestHeightOfRadius(pos, R, minH, maxH, inRange);
+    //     if (inRange && pos.z + map_params_.cell_height > minH &&
+    //         pos.z - map_params_.cell_height <
+    //             maxH + FARUtil::kTolerZ)  // use map_params_.cell_height/2.0 as a tolerance
+    //             margin
+    //     {
+    //         neighbor_obs.insert(idx);
+    //     }
+    // }
     extend_terrain_obs.clear();  // assign extended terrain obs indices
     const std::vector<int> inflate_vec{-1, 0};
     for (const int& idx : neighbor_obs) {

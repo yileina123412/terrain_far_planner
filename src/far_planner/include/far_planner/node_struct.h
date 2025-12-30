@@ -97,6 +97,7 @@ struct NavNode {
     std::vector<std::shared_ptr<NavNode>>
         connect_nodes;  //  已确认的连接 图的边  最终可通行的图，是A*算法在这个搜索路径的
     //  这些的区别是边的不同来源，是connect_nodes的子集
+    // 多边形连接
     std::vector<std::shared_ptr<NavNode>>
         poly_connects;  //  通过视线检查存储的边  DynamicGraph 中的 IsValidConnect 函数会调用
                         //  通边连接 ContourGraph::IsNavNodesConnectFreePolygon 来做碰撞检测。 核心

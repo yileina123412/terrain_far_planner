@@ -114,7 +114,7 @@ private:
     ContourGraph contour_graph_;
     MapHandler map_handler_;
     ScanHandler scan_handler_;
-    GraphMsger graph_msger_;
+    // GraphMsger graph_msger_;
 
     /* ROS Params */
     FARMasterParams master_params_;

@@ -66,7 +66,7 @@ void FARMaster::Init() {
     planner_viz_.Init(nh);
     map_handler_.Init(map_params_);
     scan_handler_.Init(scan_params_);
-    graph_msger_.Init(nh, msger_parmas_);
+    // graph_msger_.Init(nh, msger_parmas_);
 
     /* init internal params */
     odom_node_ptr_ = NULL;
@@ -246,9 +246,9 @@ void FARMaster::Loop() {
                       << "Global V-Graph Updated. Number of global vertices: " << nav_graph_.size()
                       << std::endl;
         }
-        contour_graph_.ExtractGlobalContours();      // Global Polygon Update
-        graph_planner_.UpdaetVGraph(nav_graph_);     // Graph Planner Update
-        graph_msger_.UpdateGlobalGraph(nav_graph_);  // Graph Messager Update
+        contour_graph_.ExtractGlobalContours();   // Global Polygon Update
+        graph_planner_.UpdaetVGraph(nav_graph_);  // Graph Planner Update
+        // graph_msger_.UpdateGlobalGraph(nav_graph_);  // Graph Messager Update
 
         /* Publish local boundary to lower level local planner */
         this->LocalBoundaryHandler(ContourGraph::local_boundary_);
@@ -259,7 +259,7 @@ void FARMaster::Loop() {
             planner_viz_.VizPoint3D(
                 last_internav_ptr->position, "last_nav_node", VizColor::MAGNA, 1.0);
         }
-        // planner_viz_.VizNodes(nav_graph_, "clear_nodes", VizColor::ORANGE);
+        planner_viz_.VizNodes(clear_nodes_, "clear_nodes", VizColor::ORANGE);
         // planner_viz_.VizNodes(graph_manager_.GetOutContourNodes(), "out_contour",
         // VizColor::YELLOW);
         planner_viz_.VizPoint3D(FARUtil::free_odom_p, "free_odom_position", VizColor::ORANGE, 1.0);
