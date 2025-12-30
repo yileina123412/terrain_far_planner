@@ -56,8 +56,8 @@ public:
 
     // static functions
     // 传入轮廓节点，将轮廓点转化为ct点，并整理多边形
-    void UpdateContourGraph(
-        const NavNodePtr& odom_node_ptr, const std::vector<std::vector<Point3D>>& filtered_contours);
+    void UpdateContourGraph(const NavNodePtr& odom_node_ptr,
+        const std::vector<std::vector<Point3D>>& filtered_contours);
     // 传入陡坡缓坡的节点
     void UpdateContourGraphTerrain(const std::vector<std::vector<Point3D>>& steep_boundary,
         const std::vector<std::vector<Point3D>>& steep_inner,
@@ -65,32 +65,37 @@ public:
         const std::vector<std::vector<Point3D>>& moderate_inner);
 
     /* Match current contour with global navigation nodes */
-    void MatchContourWithNavGraph(
-        const NodePtrStack& global_nodes, const NodePtrStack& near_nodes, CTNodeStack& new_convex_vertices);
+    void MatchContourWithNavGraph(const NodePtrStack& global_nodes, const NodePtrStack& near_nodes,
+        CTNodeStack& new_convex_vertices);
     // 从全局轮廓集合中提取和分类不同类型的轮廓边，为后续的连接验证和碰撞检测提供结构化的轮廓数据
     void ExtractGlobalContours();
 
-    static NavNodePtr MatchOutrangeNodeWithCTNode(const NavNodePtr& out_node_ptr, const NodePtrStack& near_nodes);
+    static NavNodePtr MatchOutrangeNodeWithCTNode(
+        const NavNodePtr& out_node_ptr, const NodePtrStack& near_nodes);
 
     static bool IsContourLineMatch(
         const NavNodePtr& inNode_ptr, const NavNodePtr& outNode_ptr, CTNodePtr& matched_ctnode);
 
-    static bool IsNavNodesConnectFromContour(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2);
+    static bool IsNavNodesConnectFromContour(
+        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2);
 
     static bool IsCTNodesConnectFromContour(const CTNodePtr& ctnode1, const CTNodePtr& ctnode2);
 
-    static bool IsNavNodesConnectFreePolygon(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2);
+    static bool IsNavNodesConnectFreePolygon(
+        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2);
 
-    static bool IsNavToGoalConnectFreePolygon(const NavNodePtr& node_ptr, const NavNodePtr& goal_ptr);
+    static bool IsNavToGoalConnectFreePolygon(
+        const NavNodePtr& node_ptr, const NavNodePtr& goal_ptr);
 
     static bool IsPoint3DConnectFreePolygon(const Point3D& p1, const Point3D& p2);
 
     static bool IsEdgeCollideBoundary(const Point3D& p1, const Point3D& p2);
 
-    static bool IsPointsConnectFreePolygon(
-        const ConnectPair& cedge, const ConnectPair& bd_cedge, const HeightPair h_pair, const bool& is_global_check);
+    static bool IsPointsConnectFreePolygon(const ConnectPair& cedge, const ConnectPair& bd_cedge,
+        const HeightPair h_pair, const bool& is_global_check);
 
-    static inline void MatchCTNodeWithNavNode(const CTNodePtr& ctnode_ptr, const NavNodePtr& node_ptr) {
+    static inline void MatchCTNodeWithNavNode(
+        const CTNodePtr& ctnode_ptr, const NavNodePtr& node_ptr) {
         if (ctnode_ptr == NULL || node_ptr == NULL) return;
         ctnode_ptr->is_global_match = true;
         ctnode_ptr->nav_node_id = node_ptr->id;
@@ -113,6 +118,8 @@ private:
     static CTNodeStack polys_ctnodes_;
     // 存储多边形，多边形几何
     static PolygonStack contour_polygons_;
+    // 存储多边形，陡坡的边缘
+    static PolygonStack steep_polygons_;
     ContourGraphParams ctgraph_params_;
     float ALIGN_ANGLE_COS;
     NavNodePtr odom_node_ptr_ = NULL;
@@ -125,18 +132,30 @@ private:
     /* static private functions */
     inline void AddCTNodeToGraph(const CTNodePtr& ctnode_ptr) {
         if (ctnode_ptr == NULL && ctnode_ptr->free_direct == NodeFreeDirect::UNKNOW) {
-            if (FARUtil::IsDebug) ROS_ERROR_THROTTLE(1.0, "CG: Add ctnode to contour graph fails, ctnode is invaild.");
+            if (FARUtil::IsDebug)
+                ROS_ERROR_THROTTLE(
+                    1.0, "CG: Add ctnode to contour graph fails, ctnode is invaild.");
             return;
         }
         ContourGraph::contour_graph_.push_back(ctnode_ptr);
     }
-
+    // 将轮廓多边形添加近contour_polygons_
     inline void AddPolyToContourPolygon(const PolygonPtr& poly_ptr) {
         if (poly_ptr == NULL || poly_ptr->vertices.empty()) {
-            if (FARUtil::IsDebug) ROS_ERROR_THROTTLE(1.0, "CG: Add polygon fails, polygon is invaild.");
+            if (FARUtil::IsDebug)
+                ROS_ERROR_THROTTLE(1.0, "CG: Add polygon fails, polygon is invaild.");
             return;
         }
         ContourGraph::contour_polygons_.push_back(poly_ptr);
+    }
+    // 将陡坡轮廓添加进steep_polygons_
+    inline void AddPolyToSteepPolygon(const PolygonPtr& poly_ptr) {
+        if (poly_ptr == NULL || poly_ptr->vertices.empty()) {
+            if (FARUtil::IsDebug)
+                ROS_ERROR_THROTTLE(1.0, "CG: Add steep polygon fails, polygon is invaild.");
+            return;
+        }
+        ContourGraph::steep_polygons_.push_back(poly_ptr);
     }
 
     inline bool IsActiveEdge(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
@@ -147,7 +166,8 @@ private:
     }
 
     inline void AddConnect(const CTNodePtr& ctnode_ptr1, const CTNodePtr& ctnode_ptr2) {
-        if (ctnode_ptr1 != ctnode_ptr2 && !FARUtil::IsTypeInStack(ctnode_ptr2, ctnode_ptr1->connect_nodes) &&
+        if (ctnode_ptr1 != ctnode_ptr2 &&
+            !FARUtil::IsTypeInStack(ctnode_ptr2, ctnode_ptr1->connect_nodes) &&
             !FARUtil::IsTypeInStack(ctnode_ptr1, ctnode_ptr2->connect_nodes)) {
             ctnode_ptr1->connect_nodes.push_back(ctnode_ptr2);
             ctnode_ptr2->connect_nodes.push_back(ctnode_ptr1);
@@ -173,9 +193,10 @@ private:
         return true;
     }
 
-    static inline bool IsEdgeInLocalRange(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
-        if (node_ptr1->is_near_nodes || node_ptr2->is_near_nodes || FARUtil::IsNodeInLocalRange(node_ptr1) ||
-            FARUtil::IsNodeInLocalRange(node_ptr2)) {
+    static inline bool IsEdgeInLocalRange(
+        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
+        if (node_ptr1->is_near_nodes || node_ptr2->is_near_nodes ||
+            FARUtil::IsNodeInLocalRange(node_ptr1) || FARUtil::IsNodeInLocalRange(node_ptr2)) {
             return true;
         }
         return false;
@@ -184,7 +205,8 @@ private:
     template <typename NodeType>
     static inline cv::Point2f NodeProjectDir(const NodeType& node) {
         cv::Point2f project_dir(0, 0);
-        if (node->free_direct != NodeFreeDirect::PILLAR && node->free_direct != NodeFreeDirect::UNKNOW) {
+        if (node->free_direct != NodeFreeDirect::PILLAR &&
+            node->free_direct != NodeFreeDirect::UNKNOW) {
             const Point3D topo_dir = FARUtil::SurfTopoDirect(node->surf_dirs);
             if (node->free_direct == NodeFreeDirect::CONCAVE) {
                 project_dir = cv::Point2f(topo_dir.x, topo_dir.y);
@@ -222,20 +244,22 @@ private:
     static bool IsCTNodesConnectWithinOrder(
         const CTNodePtr& ctnode1, const CTNodePtr& ctnode2, CTNodePtr& block_vertex);
 
-    static ConnectPair ReprojectEdge(
-        const NavNodePtr& node1, const NavNodePtr& node2, const float& dist, const bool& is_global_check);
+    static ConnectPair ReprojectEdge(const NavNodePtr& node1, const NavNodePtr& node2,
+        const float& dist, const bool& is_global_check);
 
-    static ConnectPair ReprojectEdge(const CTNodePtr& node1, const NavNodePtr& node2, const float& dist);
+    static ConnectPair ReprojectEdge(
+        const CTNodePtr& node1, const NavNodePtr& node2, const float& dist);
 
     static bool IsEdgeCollidePoly(const PointStack& poly, const ConnectPair& edge);
 
     static bool IsEdgeCollideSegment(const PointPair& line, const ConnectPair& edge);
 
-    static bool IsCTMatchLineFreePolygon(
-        const CTNodePtr& matched_ctnode, const NavNodePtr& matched_navnode, const bool& is_global_check);
+    static bool IsCTMatchLineFreePolygon(const CTNodePtr& matched_ctnode,
+        const NavNodePtr& matched_navnode, const bool& is_global_check);
 
-    static bool IsValidBoundary(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, bool& is_new);
-
+    static bool IsValidBoundary(
+        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, bool& is_new);
+    // 检查范围，是否需要全局检查 如果两个点有一个不在传感器范围则需要全局检查  全在则局部
     inline static bool IsNeedGlobalCheck(const Point3D& p1, const Point3D& p2) {
         if (!FARUtil::IsPointInLocalRange(p1) || !FARUtil::IsPointInLocalRange(p2)) {
             return true;
@@ -244,7 +268,8 @@ private:
     }
 
     static inline bool IsOverlapRange(const HeightPair& hpair, const HeightPair& hpairRef) {
-        if (hpair.maxH > hpairRef.minH - FARUtil::kTolerZ || hpair.minH < hpairRef.maxH + FARUtil::kTolerZ) {
+        if (hpair.maxH > hpairRef.minH - FARUtil::kTolerZ ||
+            hpair.minH < hpairRef.maxH + FARUtil::kTolerZ) {
             return true;
         }
         return false;
@@ -254,13 +279,16 @@ private:
         ContourGraph::polys_ctnodes_.clear();
         ContourGraph::contour_graph_.clear();
         ContourGraph::contour_polygons_.clear();
+        ContourGraph::steep_polygons_.clear();
     }
 
     bool IsAPillarPolygon(const PointStack& vertex_points, float& perimeter);
     // 创建障碍物的ct点
-    void CreateCTNodeObs(const Point3D& pos, CTNodePtr& ctnode_ptr, const PolygonPtr& poly_ptr, const bool& is_pillar);
+    void CreateCTNodeObs(const Point3D& pos, CTNodePtr& ctnode_ptr, const PolygonPtr& poly_ptr,
+        const bool& is_pillar);
     // 创建其他类型的ct点
-    void CreatCTNodeTerrain(const Point3D& pos, CTNodePtr& ctnode_ptr, const bool& is_pillar, TerrainType terrain_type);
+    void CreatCTNodeTerrain(
+        const Point3D& pos, CTNodePtr& ctnode_ptr, const bool& is_pillar, TerrainType terrain_type);
     void CreatePolygon(const PointStack& poly_points, PolygonPtr& poly_ptr);
 
     NavNodePtr NearestNavNodeForCTNode(const CTNodePtr& ctnode_ptr, const NodePtrStack& near_nodes);

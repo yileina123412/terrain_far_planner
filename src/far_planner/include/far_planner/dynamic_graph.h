@@ -25,7 +25,25 @@ private:
     NavNodePtr cur_internav_ptr_ = NULL;
     NavNodePtr last_internav_ptr_ = NULL;
     NodePtrStack new_nodes_;
+    // 不同的局部节点集合
+    /**
+     * near_nav_nodes_:近邻导航节点：在局部范围内且已激活或成为边界节点  半径30m
+     * 核心的局部导航节点，用于路径规划和连接性检查 半径30m
+     *  wide_near_nodes_:宽近邻近节点：比邻近节点更大的范围     半径30m
+     * 在局部范围内且在地形上的所有节点,范围大于near_nav_nodes_，实际边连接和导航 需要地形约束
+     * extend_match_nodes_：扩展匹配节点：最大的处理范围  传感器范围，用于重新评估和角点检测 半径30m
+     * margin_near_nodes_：边缘节点：不再局部范围但仍需要处理的节点，is_active || is_boundary
+     * 但不在局部范围内 处理边界情况 internav_near_nodes_：中间导航节点：近邻节点中的导航点
+     * 长距离路径规划   半径30m
+     * surround_internav_nodes_：周围导航节点：机器人局部规划范围内的最近的导航节点   近距离轨迹规划
+     * 半径2.5m
+     */
     NodePtrStack near_nav_nodes_, wide_near_nodes_, extend_match_nodes_, margin_near_nodes_;
+    /**
+     * internav_near_nodes_：中间导航节点：近邻节点中的导航点     长距离路径规划   半径30m
+     * surround_internav_nodes_：周围导航节点：机器人局部规划范围内的最近的导航节点   近距离轨迹规划
+     * 半径2.5m
+     *  */
     NodePtrStack internav_near_nodes_, surround_internav_nodes_;
     NodePtrStack out_contour_nodes_;
     float CONNECT_ANGLE_COS, NOISE_ANGLE_COS;
@@ -36,15 +54,18 @@ private:
     static std::size_t id_tracker_;  // Global unique id start from "0" [per robot]
     static NodePtrStack globalGraphNodes_;
     static std::unordered_map<std::size_t, NavNodePtr> idx_node_map_;
-    static std::unordered_map<NavNodePtr, std::pair<int, std::unordered_set<NavNodePtr>>> out_contour_nodes_map_;
+    static std::unordered_map<NavNodePtr, std::pair<int, std::unordered_set<NavNodePtr>>>
+        out_contour_nodes_map_;
 
     TerrainPlanner terrain_planner_;
     TerrainPlannerParams tp_params_;
 
     /* Evaluate exist edges */
-    bool IsValidConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, const bool& is_check_contour);
+    bool IsValidConnect(
+        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, const bool& is_check_contour);
 
-    bool NodeLocalPerception(const NavNodePtr& node_ptr, bool& _is_wall_end, const bool& is_nearby_update = true);
+    bool NodeLocalPerception(
+        const NavNodePtr& node_ptr, bool& _is_wall_end, const bool& is_nearby_update = true);
 
     bool IsInDirectConstraint(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2);
 
@@ -86,8 +107,10 @@ private:
 
     bool ReEvaluateConnectUsingTerrian(const NavNodePtr& node_ptr1, const NavNodePtr node_ptr2);
 
+    // 动态环境下的判断，暂且不用管  静态环境一定返回false
     inline bool IsNodeInTerrainOccupy(const NavNodePtr& node_ptr) {
-        if (!FARUtil::IsStaticEnv && terrain_planner_.IsPointOccupy(node_ptr->position)) return true;
+        if (!FARUtil::IsStaticEnv && terrain_planner_.IsPointOccupy(node_ptr->position))
+            return true;
         return false;
     }
 
@@ -103,7 +126,7 @@ private:
     static inline void RemoveNodeIdFromMap(const NavNodePtr& node_ptr) {
         idx_node_map_.erase(node_ptr->id);
     }
-
+    // 更新cur_internav_ptr_，并建立轨迹连接
     inline void UpdateCurInterNavNode(const NavNodePtr& internav_node_ptr) {
         if (internav_node_ptr == NULL || !internav_node_ptr->is_navpoint) return;
         cur_internav_ptr_ = internav_node_ptr;
@@ -141,15 +164,16 @@ private:
         const auto it1 = node_ptr1->trajectory_votes.find(node_ptr2->id);
         const auto it2 = node_ptr2->trajectory_votes.find(node_ptr1->id);
         if (FARUtil::IsDebug) {
-            if (it1 == node_ptr1->trajectory_votes.end() || it2 == node_ptr2->trajectory_votes.end() ||
-                it1->second != it2->second) {
+            if (it1 == node_ptr1->trajectory_votes.end() ||
+                it2 == node_ptr2->trajectory_votes.end() || it1->second != it2->second) {
                 ROS_ERROR("DG: Trajectory votes queue error.");
                 return;
             }
         }
         it1->second++, it2->second++;
         if (it1->second > dg_params_.finalize_thred) {  // clear trajectory connections and votes
-            if (FARUtil::IsDebug) ROS_WARN("DG: Current trajectory edge disconnected, no traversable path found.");
+            if (FARUtil::IsDebug)
+                ROS_WARN("DG: Current trajectory edge disconnected, no traversable path found.");
             node_ptr1->trajectory_votes.erase(node_ptr2->id);
             FARUtil::EraseNodeFromStack(node_ptr2, node_ptr1->trajectory_connects);
 
@@ -159,6 +183,7 @@ private:
     }
 
     /* Define inline functions */
+    // 根据被投票的数量决定是否设置is_merged，就是当前的点够不够清理阈值
     inline bool SetNodeToClear(const NavNodePtr& node_ptr) {
         if (FARUtil::IsStaticNode(node_ptr)) return false;
         node_ptr->clear_dumper_count++;
@@ -169,7 +194,7 @@ private:
         }
         return false;
     }
-
+    // 将和ct点匹配到的边缘节点margin_near_nodes_节点加入near_nav_nodes_和wide_near_nodes_中
     inline void UpdateNearNodesWithMatchedMarginNodes(
         const NodePtrStack& margin_nodes, NodePtrStack& near_nodes, NodePtrStack& wide_nodes) {
         for (const auto& node_ptr : margin_nodes) {
@@ -187,24 +212,29 @@ private:
             node_ptr->clear_dumper_count = 0;
         }
     }
-
+    // 是否再一定范围
     inline bool IsInternavInRange(const NavNodePtr& cur_inter_ptr) {
         if (cur_inter_ptr == NULL) return false;
         if (cur_inter_ptr->fgscore > FARUtil::kLocalPlanRange ||
-            !FARUtil::IsPointInToleratedHeight(cur_inter_ptr->position, FARUtil::kMarginHeight)) {
+            !FARUtil::IsPointInToleratedHeight(
+                cur_inter_ptr->position, FARUtil::kMarginHeight * 2)) {
             return false;
         }
         return true;
     }
-
+    // 两个节点是否允许多边形连接验证
+    // 不允许的条件：is_finalized && 为匹配到ct点 && 不是自由空间节点
+    // 一个已经稳定的普通节点，既不在轮廓上，也不是特殊节点
     inline bool IsPolyMatchedForConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
-        if ((node_ptr1->is_finalized && !node_ptr1->is_contour_match && !FARUtil::IsFreeNavNode(node_ptr1)) ||
-            (node_ptr2->is_finalized && !node_ptr2->is_contour_match && !FARUtil::IsFreeNavNode(node_ptr2))) {
+        if ((node_ptr1->is_finalized && !node_ptr1->is_contour_match &&
+                !FARUtil::IsFreeNavNode(node_ptr1)) ||
+            (node_ptr2->is_finalized && !node_ptr2->is_contour_match &&
+                !FARUtil::IsFreeNavNode(node_ptr2))) {
             return false;
         }
         return true;
     }
-
+    // 检查两个点的多边形连接票数edge_votes是否够了，自由节点1票，否则三票
     inline bool IsPolygonEdgeVoteTrue(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
         const auto it1 = node_ptr1->edge_votes.find(node_ptr2->id);
         const auto it2 = node_ptr2->edge_votes.find(node_ptr1->id);
@@ -219,7 +249,7 @@ private:
         }
         return false;
     }
-
+    // 检查是否有一个点是自由点或轮廓匹配点
     inline bool IsNodeDirectConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
         if (FARUtil::IsFreeNavNode(node_ptr1) || FARUtil::IsFreeNavNode(node_ptr2)) return true;
         if (node_ptr1->is_contour_match || node_ptr2->is_contour_match) return true;
@@ -238,6 +268,7 @@ private:
     }
 
     /* Create new navigation node, and return a shared pointer to it */
+    // 创建导航点
     inline void CreateNewNavNodeFromContour(const CTNodePtr& ctnode_ptr, NavNodePtr& node_ptr) {
         CreateNavNodeFromPoint(ctnode_ptr->position, node_ptr, false);
         node_ptr->is_contour_match = true;
@@ -247,9 +278,10 @@ private:
         node_ptr->gradient = ctnode_ptr->gradient;
         node_ptr->terrain_type = ctnode_ptr->terrain_type;
         node_ptr->slop = ctnode_ptr->slop;
+        node_ptr->is_terrain = ctnode_ptr->is_terrain;
         UpdateNodeSurfDirs(node_ptr, ctnode_ptr->surf_dirs);
     }
-
+    // 检查两个点如果是is_boundary的情况  目前的话一定为false
     inline bool IsBoundaryConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
         if (node_ptr1->is_boundary && node_ptr2->is_boundary) {
             if (FARUtil::IsTypeInStack(node_ptr2, node_ptr1->contour_connects)) {
@@ -258,7 +290,7 @@ private:
         }
         return false;
     }
-
+    // 是否值的作为新导航点
     inline bool IsAValidNewNode(const CTNodePtr ctnode_ptr, bool& is_near_new) {
         is_near_new = FARUtil::IsPointNearNewPoints(ctnode_ptr->position, true);
         if (ctnode_ptr->is_contour_necessary || is_near_new) {
@@ -281,7 +313,8 @@ private:
         }
     }
 
-    static inline bool DeleteContourConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
+    static inline bool DeleteContourConnect(
+        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
         if (!FARUtil::IsTypeInStack(node_ptr1, node_ptr2->contour_connects)) return false;
 
         FARUtil::EraseNodeFromStack(node_ptr2, node_ptr1->contour_connects);
@@ -328,7 +361,8 @@ private:
         }
         for (const auto& pt_cnode_ptr : node_ptr->potential_contours) {
             const auto it = pt_cnode_ptr->contour_votes.find(node_ptr->id);
-            if (pt_cnode_ptr->is_active && !pt_cnode_ptr->is_near_nodes && FARUtil::IsVoteTrue(it->second, false)) {
+            if (pt_cnode_ptr->is_active && !pt_cnode_ptr->is_near_nodes &&
+                FARUtil::IsVoteTrue(it->second, false)) {
                 AddNodeToOutrangeContourMap(pt_cnode_ptr);
             }
             FARUtil::EraseNodeFromStack(node_ptr, pt_cnode_ptr->potential_contours);
@@ -347,13 +381,13 @@ private:
         if (node_ptr->is_merged) return true;
         return false;
     }
-
+    // 重置位置和表面方向的滑动窗口
     inline void ResetNodeFilters(const NavNodePtr& node_ptr) {
         node_ptr->is_finalized = false;
         node_ptr->pos_filter_vec.clear();
         node_ptr->surf_dirs_vec.clear();
     }
-
+    // 重置contour_votes
     inline void ResetContourVotes(const NavNodePtr& node_ptr) {
         for (const auto& pcnode : node_ptr->potential_contours) {
             const auto it1 = node_ptr->contour_votes.find(pcnode->id);
@@ -367,7 +401,7 @@ private:
             }
         }
     }
-
+    // 重置edge_votes
     inline void ResetPolygonVotes(const NavNodePtr& node_ptr) {
         for (const auto& pcnode : node_ptr->potential_edges) {
             const auto it1 = node_ptr->edge_votes.find(pcnode->id);
@@ -381,7 +415,7 @@ private:
             }
         }
     }
-
+    // 重置contour_votes和edge_votes
     inline void ResetNodeConnectVotes(const NavNodePtr& node_ptr) {
         // reset contours
         ResetContourVotes(node_ptr);
@@ -400,6 +434,7 @@ private:
     }
 
     /* Clear nodes in global graph which is marked as merge */
+    // 清理无效的点
     inline void ClearMergedNodesInGraph() {
         // remove nodes
         for (auto it = globalGraphNodes_.begin(); it != globalGraphNodes_.end(); it++) {
@@ -423,6 +458,64 @@ private:
                 ++it;
             }
         }
+    }
+    // 根据terrain_type决定是否有连接的条件。主要是TERRAIN_STEEP的判断较为严格
+    inline bool IsConnectByTerrain(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
+        if (node_ptr1 == nullptr || node_ptr2 == nullptr) return false;
+
+        const TerrainType type1 = node_ptr1->terrain_type;
+        const TerrainType type2 = node_ptr2->terrain_type;
+
+        // ========== 1. TERRAIN_STEEP 的严格规则 ==========
+        // STEEP 只能与 STEEP 或 STEEP_BOUND 连接
+        if (type1 == TERRAIN_STEEP) {
+            return (type2 == TERRAIN_STEEP || type2 == TERRAIN_STEEP_BOUND);
+        }
+        if (type2 == TERRAIN_STEEP) {
+            return (type1 == TERRAIN_STEEP || type1 == TERRAIN_STEEP_BOUND);
+        }
+
+        // ========== 2. TERRAIN_STEEP_BOUND 可以与任意连接 ==========
+        if (type1 == TERRAIN_STEEP_BOUND || type2 == TERRAIN_STEEP_BOUND) {
+            return true;
+        }
+
+        // ========== 3. FLAT 和 MODERATE 之间可以互相连接 ==========
+        // UNKNOWN 和 OBSTACLE 也默认允许（兼容旧逻辑）
+        return true;
+    }
+    // 判断是否设计陡坡内部的连接
+    inline bool IsSteepRlate(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
+        if (node_ptr1 == nullptr || node_ptr2 == nullptr) return false;
+        const TerrainType type1 = node_ptr1->terrain_type;
+        const TerrainType type2 = node_ptr2->terrain_type;
+        if (type1 == TERRAIN_STEEP || type2 == TERRAIN_STEEP) return true;
+        return false;
+    }
+
+    // 判断from到to的点是否可以连接
+    inline bool IsConnectSteep(const NavNodePtr& from_node, const NavNodePtr& to_node) {
+        if (from_node == nullptr || to_node == nullptr) return false;
+        // 连接方向（xy平面单位向量）
+        Point3D dir = (to_node->position - from_node->position).normalize_flat();
+        // 梯度方向（xy平面单位向量）
+        Point3D grad = from_node->gradient.normalize_flat();
+        // 计算cos值
+        float cos_theta = dir.x * grad.x + dir.y * grad.y;
+        // 你可以根据需要返回cos值，也可以判断阈值
+        if (abs(cos_theta) < 0.3) return false;
+        // 2. 直上 (Power): 正数且太大 -> 砍
+        if (cos_theta > 0.95) return false;
+        // 3. 直下 & 斜切 -> 保留
+        return true;
+    }
+
+    // 关于odom点的陡坡连接
+    inline bool ConnectOdomSteep(const NavNodePtr& node_odom, const NavNodePtr& node_ptr) {
+        if (IsSteepRlate(node_odom, node_ptr)) {
+            return this->IsConnectSteep(node_odom, node_ptr);
+        } else
+            return true;
     }
 
 public:
@@ -452,7 +545,8 @@ public:
      * @param is_freeze_vgraph is stop visibility graph update (except for robot node)
      * @param clear_nodes existing nodes which is now recoginzed as false positive
      */
-    void UpdateNavGraph(const NodePtrStack& new_nodes, const bool& is_freeze_vgraph, NodePtrStack& clear_node);
+    void UpdateNavGraph(
+        const NodePtrStack& new_nodes, const bool& is_freeze_vgraph, NodePtrStack& clear_node);
 
     /**
      *  Updtae local in range nods stack: near nodes, wide near nodes etc.,
@@ -461,19 +555,22 @@ public:
 
     /* Static Functions */
 
-    static void DeletePolygonVote(
-        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, const int& queue_size, const bool& is_reset = false);
+    static void DeletePolygonVote(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2,
+        const int& queue_size, const bool& is_reset = false);
 
-    static void RecordPolygonVote(
-        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, const int& queue_size, const bool& is_reset = false);
+    static void RecordPolygonVote(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2,
+        const int& queue_size, const bool& is_reset = false);
 
-    static void FillPolygonEdgeConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, const int& queue_size);
+    static void FillPolygonEdgeConnect(
+        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, const int& queue_size);
 
-    static void FillContourConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, const int& queue_size);
+    static void FillContourConnect(
+        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, const int& queue_size);
 
     static void FillTrajConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2);
 
-    static bool IsOnTerrainConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, const bool& is_contour);
+    static bool IsOnTerrainConnect(
+        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2, const bool& is_contour);
 
     static inline void FillFrontierVotes(const NavNodePtr& node_ptr, const bool& is_frontier) {
         if (is_frontier) {
@@ -481,24 +578,26 @@ public:
             node_ptr->frontier_votes = vote_queue;
         }
     }
-
+    // 点是否能在terrain中找到高度
     static inline bool IsPointOnTerrain(const Point3D& p) {
         bool UNUSE_match = false;
         const float terrain_h = MapHandler::TerrainHeightOfPoint(p, UNUSE_match, true);
-        if (abs(p.z - terrain_h - FARUtil::vehicle_height) < FARUtil::kTolerZ) {
+        if (abs(p.z - terrain_h - FARUtil::vehicle_height) < FARUtil::kTolerZ * 5) {
             return true;
         }
         return false;
     }
-
+    // 检查两个点是否都为凸点，全为凸点返回true
     static inline bool IsConvexConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
-        if (node_ptr1->free_direct != NodeFreeDirect::CONCAVE && node_ptr2->free_direct != NodeFreeDirect::CONCAVE) {
+        if (node_ptr1->free_direct != NodeFreeDirect::CONCAVE &&
+            node_ptr2->free_direct != NodeFreeDirect::CONCAVE) {
             return true;
         }
         return false;
     }
-
-    static inline void RemoveInvaildTerrainConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
+    // 移除两点之间的terrain_votes，给其投票
+    static inline void RemoveInvaildTerrainConnect(
+        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
         const auto it1 = node_ptr1->terrain_votes.find(node_ptr2->id);
         if (it1 == node_ptr1->terrain_votes.end()) {
             node_ptr1->terrain_votes.insert({node_ptr2->id, 1});
@@ -509,7 +608,8 @@ public:
         }
     }
 
-    static inline void RecordVaildTerrainConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
+    static inline void RecordVaildTerrainConnect(
+        const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
         const auto it1 = node_ptr1->terrain_votes.find(node_ptr2->id);
         if (it1 == node_ptr1->terrain_votes.end()) return;
         if (it1->second > 0) {
@@ -518,8 +618,9 @@ public:
         }
     }
 
-    static inline void CreateNavNodeFromPoint(const Point3D& point, NavNodePtr& node_ptr, const bool& is_odom,
-        const bool& is_navpoint = false, const bool& is_goal = false, const bool& is_boundary = false) {
+    static inline void CreateNavNodeFromPoint(const Point3D& point, NavNodePtr& node_ptr,
+        const bool& is_odom, const bool& is_navpoint = false, const bool& is_goal = false,
+        const bool& is_boundary = false) {
         node_ptr = std::make_shared<NavNode>();
         node_ptr->pos_filter_vec.clear();
         node_ptr->surf_dirs_vec.clear();
@@ -549,7 +650,8 @@ public:
         node_ptr->trajectory_connects.clear();
         node_ptr->trajectory_votes.clear();
         node_ptr->terrain_votes.clear();
-        node_ptr->free_direct = (is_odom || is_navpoint) ? NodeFreeDirect::PILLAR : NodeFreeDirect::UNKNOW;
+        node_ptr->free_direct =
+            (is_odom || is_navpoint) ? NodeFreeDirect::PILLAR : NodeFreeDirect::UNKNOW;
         // planner members
         node_ptr->is_block_to_goal = false;
         node_ptr->gscore = FARUtil::kINF;
@@ -585,7 +687,8 @@ public:
     static inline void ClearGoalNodeInGraph(const NavNodePtr& node_ptr) {
         ClearNodeConnectInGraph(node_ptr);
         // DEBUG
-        if (!node_ptr->contour_connects.empty()) ROS_ERROR("DG: Goal node should not have contour connections.");
+        if (!node_ptr->contour_connects.empty())
+            ROS_ERROR("DG: Goal node should not have contour connections.");
         FARUtil::EraseNodeFromStack(node_ptr, globalGraphNodes_);
     }
 

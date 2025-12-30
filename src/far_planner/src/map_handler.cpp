@@ -43,18 +43,27 @@ void MapHandler::Init(const MapHandlerParams& params) {
     std::fill(util_remove_check_list_.begin(), util_remove_check_list_.end(), 0);
 
     // init terrain height map
-    int height_dim = std::ceil((map_params_.sensor_range + map_params_.cell_length) * 3.0f / FARUtil::kLeafSize);
+    int height_dim =
+        std::ceil((map_params_.sensor_range + map_params_.cell_length) * 3.0f / FARUtil::kLeafSize);
+    // int height_dim = std::ceil(map_params_.grid_max_length / FARUtil::kLeafSize);
     if (height_dim % 2 == 0) height_dim++;
     Eigen::Vector3i height_grid_size(height_dim, height_dim, 1);
     Eigen::Vector3d height_grid_origin(0, 0, 0);
-    // Eigen::Vector3d height_grid_resolution(FARUtil::robot_dim, FARUtil::robot_dim, FARUtil::kLeafSize);
-    Eigen::Vector3d height_grid_resolution(FARUtil::kLeafSize, FARUtil::kLeafSize, FARUtil::kLeafSize);
+    // Eigen::Vector3d height_grid_resolution(FARUtil::robot_dim, FARUtil::robot_dim,
+    // FARUtil::kLeafSize);
+    Eigen::Vector3d height_grid_resolution(
+        FARUtil::kLeafSize, FARUtil::kLeafSize, FARUtil::kLeafSize);
     std::vector<float> temp_vec;
     terrain_height_grid_ = std::make_unique<grid_ns::Grid<std::vector<float>>>(
         height_grid_size, temp_vec, height_grid_origin, height_grid_resolution, 3);
 
+    float temp_vef;
+    terrain_avg_height_grid_ = std::make_unique<grid_ns::Grid<float>>(
+        height_grid_size, temp_vef, height_grid_origin, height_grid_resolution, 3);
+
     const int n_terrain_cell = terrain_height_grid_->GetCellNumber();
-    terrain_grid_occupy_list_.resize(n_terrain_cell), terrain_grid_traverse_list_.resize(n_terrain_cell);
+    terrain_grid_occupy_list_.resize(n_terrain_cell),
+        terrain_grid_traverse_list_.resize(n_terrain_cell);
     std::fill(terrain_grid_occupy_list_.begin(), terrain_grid_occupy_list_.end(), 0);
     std::fill(terrain_grid_traverse_list_.begin(), terrain_grid_traverse_list_.end(), 0);
 
@@ -112,7 +121,8 @@ void MapHandler::ClearObsCellThroughPosition(const Point3D& point) {
             Eigen::Vector3i csub = sub;
             csub.z() += k;
             const int ind = world_obs_cloud_grid_->Sub2Ind(csub);
-            if (!world_obs_cloud_grid_->InRange(csub) || neighbor_obs_indices_.find(ind) == neighbor_obs_indices_.end())
+            if (!world_obs_cloud_grid_->InRange(csub) ||
+                neighbor_obs_indices_.find(ind) == neighbor_obs_indices_.end())
                 continue;
             world_obs_cloud_grid_->GetCell(ind)->clear();
             if (world_free_cloud_grid_->GetCell(ind)->empty()) {
@@ -122,8 +132,8 @@ void MapHandler::ClearObsCellThroughPosition(const Point3D& point) {
     }
 }
 
-void MapHandler::GetCloudOfPoint(
-    const Point3D& center, const PointCloudPtr& cloudOut, const CloudType& type, const bool& is_large) {
+void MapHandler::GetCloudOfPoint(const Point3D& center, const PointCloudPtr& cloudOut,
+    const CloudType& type, const bool& is_large) {
     cloudOut->clear();
     const Eigen::Vector3i sub = world_obs_cloud_grid_->Pos2Sub(center.x, center.y, center.z);
     const int N = is_large ? 1 : 0;
@@ -152,8 +162,8 @@ void MapHandler::SetMapOrigin(const Point3D& ori_robot_pos) {
     const Eigen::Vector3i dim = world_obs_cloud_grid_->GetSize();
     map_origin.x = ori_robot_pos.x - (map_params_.cell_length * dim.x()) / 2.0f;
     map_origin.y = ori_robot_pos.y - (map_params_.cell_length * dim.y()) / 2.0f;
-    map_origin.z =
-        ori_robot_pos.z - (map_params_.cell_height * dim.z()) / 2.0f - FARUtil::vehicle_height;  // From Ground Level
+    map_origin.z = ori_robot_pos.z - (map_params_.cell_height * dim.z()) / 2.0f -
+                   FARUtil::vehicle_height;  // From Ground Level
     Eigen::Vector3d pointcloud_grid_origin(map_origin.x, map_origin.y, map_origin.z);
     world_obs_cloud_grid_->SetOrigin(pointcloud_grid_origin);
     MapHandlerParams map_params_;
@@ -166,7 +176,8 @@ void MapHandler::SetMapOrigin(const Point3D& ori_robot_pos) {
 // 并更新terrain_heigh grid的坐标位置，让其跟着机器人移动
 void MapHandler::UpdateRobotPosition(const Point3D& odom_pos) {
     if (!is_init_) this->SetMapOrigin(odom_pos);
-    robot_cell_sub_ = world_obs_cloud_grid_->Pos2Sub(Eigen::Vector3d(odom_pos.x, odom_pos.y, odom_pos.z));
+    robot_cell_sub_ =
+        world_obs_cloud_grid_->Pos2Sub(Eigen::Vector3d(odom_pos.x, odom_pos.y, odom_pos.z));
     // Get neighbor indices
     neighbor_free_indices_.clear(), neighbor_obs_indices_.clear();
     const int N = neighbor_Lnum_ / 2;
@@ -182,7 +193,7 @@ void MapHandler::UpdateRobotPosition(const Point3D& odom_pos) {
                 int ind = world_obs_cloud_grid_->Sub2Ind(neighbor_sub);
                 neighbor_free_indices_.insert(ind);
             }
-            for (int k = -H; k <= H; k++) {
+            for (int k = -H * 2; k <= H * 2; k++) {
                 neighbor_sub.z() = robot_cell_sub_.z() + k;
                 if (world_obs_cloud_grid_->InRange(neighbor_sub)) {
                     int ind = world_obs_cloud_grid_->Sub2Ind(neighbor_sub);
@@ -208,6 +219,7 @@ void MapHandler::SetTerrainHeightGridOrigin(const Point3D& robot_pos) {
     grid_origin.y() = robot_pos.y - (res.y() * dim.y()) / 2.0f;
     grid_origin.z() = 0.0f - (res.z() * dim.z()) / 2.0f;
     terrain_height_grid_->SetOrigin(grid_origin);
+    terrain_avg_height_grid_->SetOrigin(grid_origin);
 }
 
 void MapHandler::GetSurroundObsCloud(const PointCloudPtr& obsCloudOut) {
@@ -233,7 +245,8 @@ void MapHandler::UpdateObsCloudGrid(const PointCloudPtr& obsCloudInOut) {
     std::fill(util_obs_modified_list_.begin(), util_obs_modified_list_.end(), 0);
     PointCloudPtr obs_valid_ptr(new pcl::PointCloud<PCLPoint>());
     for (const auto& point : obsCloudInOut->points) {
-        Eigen::Vector3i sub = world_obs_cloud_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, point.z));
+        Eigen::Vector3i sub =
+            world_obs_cloud_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, point.z));
         if (!world_obs_cloud_grid_->InRange(sub)) continue;
         const int ind = world_obs_cloud_grid_->Sub2Ind(sub);
         if (neighbor_obs_indices_.find(ind) != neighbor_obs_indices_.end()) {
@@ -255,7 +268,8 @@ void MapHandler::UpdateFreeCloudGrid(const PointCloudPtr& freeCloudIn) {
     if (!is_init_ || freeCloudIn->empty()) return;
     std::fill(util_free_modified_list_.begin(), util_free_modified_list_.end(), 0);
     for (const auto& point : freeCloudIn->points) {
-        Eigen::Vector3i sub = world_free_cloud_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, point.z));
+        Eigen::Vector3i sub =
+            world_free_cloud_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, point.z));
         if (!world_free_cloud_grid_->InRange(sub)) continue;
         const int ind = world_free_cloud_grid_->Sub2Ind(sub);
         world_free_cloud_grid_->GetCell(ind)->points.push_back(point);
@@ -276,7 +290,7 @@ float MapHandler::TerrainHeightOfPoint(const Point3D& p, bool& is_matched, const
         const int ind = terrain_height_grid_->Sub2Ind(sub);
         if (terrain_grid_traverse_list_[ind] != 0) {
             is_matched = true;
-            return terrain_height_grid_->GetCell(ind)[0];
+            return terrain_avg_height_grid_->GetCell(ind);
         }
     }
     if (is_search) {
@@ -289,7 +303,8 @@ float MapHandler::TerrainHeightOfPoint(const Point3D& p, bool& is_matched, const
 
 float MapHandler::NearestTerrainHeightofNavPoint(const Point3D& point, bool& is_associated) {
     const float p_th = point.z - FARUtil::vehicle_height;
-    const Eigen::Vector3i ori_sub = world_free_cloud_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, p_th));
+    const Eigen::Vector3i ori_sub =
+        world_free_cloud_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, p_th));
     is_associated = false;
     if (world_free_cloud_grid_->InRange(ori_sub)) {
         // downward seach
@@ -339,10 +354,12 @@ float MapHandler::NearestTerrainHeightofNavPoint(const Point3D& point, bool& is_
     }
     return p_th;
 }
-
+// 判断导航点是不是在地形相关的领域网络中
+// 就是是否在neighbor_obs_indices_索引范围内或者extend_obs_indices_
 bool MapHandler::IsNavPointOnTerrainNeighbor(const Point3D& point, const bool& is_extend) {
-    const float h = point.z - FARUtil::vehicle_height;
-    const Eigen::Vector3i sub = world_obs_cloud_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, h));
+    const float h = 0;
+    const Eigen::Vector3i sub =
+        world_obs_cloud_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, h));
     if (!world_obs_cloud_grid_->InRange(sub)) return false;
     const int ind = world_obs_cloud_grid_->Sub2Ind(sub);
     if (is_extend && extend_obs_indices_.find(ind) != extend_obs_indices_.end()) {
@@ -353,12 +370,13 @@ bool MapHandler::IsNavPointOnTerrainNeighbor(const Point3D& point, const bool& i
     }
     return false;
 }
-
+// 调整导航点的高度
 void MapHandler::AdjustNodesHeight(const NodePtrStack& nodes) {
     if (nodes.empty()) return;
     for (const auto& node_ptr : nodes) {
         if (!node_ptr->is_active || node_ptr->is_boundary || FARUtil::IsFreeNavNode(node_ptr) ||
-            FARUtil::IsOutsideGoal(node_ptr) || !FARUtil::IsPointInLocalRange(node_ptr->position, true)) {
+            FARUtil::IsOutsideGoal(node_ptr) ||
+            !FARUtil::IsPointInLocalRange(node_ptr->position, true)) {
             continue;
         }
         bool is_match = false;
@@ -381,15 +399,17 @@ void MapHandler::AdjustCTNodeHeight(const CTNodeStack& ctnodes) {
     const float H_MIN = FARUtil::robot_pos.z - FARUtil::kTolerZ;
     for (auto& ctnode_ptr : ctnodes) {
         float min_th, max_th;
-        const float avg_h = NearestHeightOfRadius(
-            ctnode_ptr->position, FARUtil::kMatchDist, min_th, max_th, ctnode_ptr->is_ground_associate);
+        const float avg_h = NearestHeightOfRadius(ctnode_ptr->position, FARUtil::kMatchDist, min_th,
+            max_th, ctnode_ptr->is_ground_associate);
         if (ctnode_ptr->is_ground_associate) {
-            ctnode_ptr->position.z = min_th + FARUtil::vehicle_height;
-            ctnode_ptr->position.z = std::max(std::min(ctnode_ptr->position.z, H_MAX), H_MIN);
-        } else {
-            ctnode_ptr->position.z = TerrainHeightOfPoint(ctnode_ptr->position, ctnode_ptr->is_ground_associate, true);
+            // ctnode_ptr->position.z = min_th + FARUtil::vehicle_height;
+            // ctnode_ptr->position.z = std::max(std::min(ctnode_ptr->position.z, H_MAX), H_MIN);
             ctnode_ptr->position.z += FARUtil::vehicle_height;
-            ctnode_ptr->position.z = std::max(std::min(ctnode_ptr->position.z, H_MAX), H_MIN);
+        } else {
+            ctnode_ptr->position.z =
+                TerrainHeightOfPoint(ctnode_ptr->position, ctnode_ptr->is_ground_associate, true);
+            ctnode_ptr->position.z += FARUtil::vehicle_height;
+            // ctnode_ptr->position.z = std::max(std::min(ctnode_ptr->position.z, H_MAX), H_MIN);
         }
     }
 }
@@ -401,7 +421,8 @@ void MapHandler::ObsNeighborCloudWithTerrain(
     const float R = map_params_.cell_length * 0.7071f;  // sqrt(2)/2
     for (const auto& idx : neighbor_copy) {
         const Point3D pos = Point3D(world_obs_cloud_grid_->Ind2Pos(idx));
-        const Eigen::Vector3i sub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(pos.x, pos.y, 0.0f));
+        const Eigen::Vector3i sub =
+            terrain_height_grid_->Pos2Sub(Eigen::Vector3d(pos.x, pos.y, 0.0f));
         const int terrain_ind = terrain_height_grid_->Sub2Ind(sub);
         bool inRange = false;
         float minH, maxH;
@@ -427,14 +448,16 @@ void MapHandler::ObsNeighborCloudWithTerrain(
     }
 }
 
-void MapHandler::UpdateTerrainHeightGrid(const PointCloudPtr& freeCloudIn, const PointCloudPtr& terrainHeightOut) {
+void MapHandler::UpdateTerrainHeightGrid(
+    const PointCloudPtr& freeCloudIn, const PointCloudPtr& terrainHeightOut) {
     if (freeCloudIn->empty()) return;
     PointCloudPtr copy_free_ptr(new pcl::PointCloud<PCLPoint>());
     pcl::copyPointCloud(*freeCloudIn, *copy_free_ptr);
     // FARUtil::FilterCloud(copy_free_ptr, terrain_height_grid_->GetResolution());
     std::fill(terrain_grid_occupy_list_.begin(), terrain_grid_occupy_list_.end(), 0);
     for (const auto& point : copy_free_ptr->points) {
-        Eigen::Vector3i csub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, 0.0f));
+        Eigen::Vector3i csub =
+            terrain_height_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, 0.0f));
         std::vector<Eigen::Vector3i> subs;
         this->Expansion2D(csub, subs, INFLATE_N);
         for (const auto& sub : subs) {
@@ -458,16 +481,17 @@ void MapHandler::UpdateTerrainHeightGrid(const PointCloudPtr& freeCloudIn, const
     if (terrainHeightOut->empty()) {  // set terrain height kdtree
         FARUtil::ClearKdTree(flat_terrain_cloud_, kdtree_terrain_clould_);
     } else {
-        this->AssignFlatTerrainCloud(terrainHeightOut, flat_terrain_cloud_);
-        kdtree_terrain_clould_->setInputCloud(flat_terrain_cloud_);
+        // this->AssignFlatTerrainCloud(terrainHeightOut, flat_terrain_cloud_);
+        // kdtree_terrain_clould_->setInputCloud(flat_terrain_cloud_);
+        kdtree_terrain_clould_->setInputCloud(ave_high_terrain_cloud_);
     }
     // update surrounding obs cloud grid indices based on terrain
     this->ObsNeighborCloudWithTerrain(neighbor_obs_indices_, extend_obs_indices_);
 }
 
 void MapHandler::CalculateAveHigh() {
-    const Eigen::Vector3i robot_sub =
-        terrain_height_grid_->Pos2Sub(Eigen::Vector3d(FARUtil::robot_pos.x, FARUtil::robot_pos.y, 0.0f));
+    const Eigen::Vector3i robot_sub = terrain_height_grid_->Pos2Sub(
+        Eigen::Vector3d(FARUtil::robot_pos.x, FARUtil::robot_pos.y, 0.0f));
     ave_high_terrain_cloud_->clear();
     if (!terrain_height_grid_->InRange(robot_sub)) {
         ROS_ERROR("MH: terrain height analysis error: robot position is not in range");
@@ -488,7 +512,8 @@ void MapHandler::CalculateAveHigh() {
         } else {
             // 复制数据用于排序（不修改原始 grid）
             std::vector<float> heights_copy(height_vec.begin(), height_vec.end());
-            std::nth_element(heights_copy.begin(), heights_copy.begin() + heights_copy.size() / 2, heights_copy.end());
+            std::nth_element(heights_copy.begin(), heights_copy.begin() + heights_copy.size() / 2,
+                heights_copy.end());
             avg_height = heights_copy[heights_copy.size() / 2];
         }
 
@@ -504,6 +529,7 @@ void MapHandler::CalculateAveHigh() {
 
         // 添加到输出点云
         ave_high_terrain_cloud_->points.push_back(point);
+        terrain_avg_height_grid_->GetCell(i) = avg_height;
     }
     ave_high_terrain_cloud_->width = ave_high_terrain_cloud_->points.size();
     ave_high_terrain_cloud_->height = 1;
@@ -536,7 +562,8 @@ void MapHandler::GetOccupancyCeilsCenters(PointStack& occupancy_centers) {
 void MapHandler::RemoveObsCloudFromGrid(const PointCloudPtr& obsCloud) {
     std::fill(util_remove_check_list_.begin(), util_remove_check_list_.end(), 0);
     for (const auto& point : obsCloud->points) {
-        Eigen::Vector3i sub = world_obs_cloud_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, point.z));
+        Eigen::Vector3i sub =
+            world_obs_cloud_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, point.z));
         if (!world_free_cloud_grid_->InRange(sub)) continue;
         const int ind = world_free_cloud_grid_->Sub2Ind(sub);
         util_remove_check_list_[ind] = 1;
@@ -550,7 +577,8 @@ void MapHandler::RemoveObsCloudFromGrid(const PointCloudPtr& obsCloud) {
 
 void MapHandler::GridToImg(cv::Mat& height_img, cv::Mat& var_img, cv::Mat& mask_img) {
     const Eigen::Vector3i dim = terrain_height_grid_->GetSize();
-    height_img = cv::Mat(dim.y(), dim.x(), CV_32FC1, cv::Scalar(std::numeric_limits<float>::quiet_NaN()));
+    height_img =
+        cv::Mat(dim.y(), dim.x(), CV_32FC1, cv::Scalar(std::numeric_limits<float>::quiet_NaN()));
     var_img = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
     mask_img = cv::Mat::zeros(dim.y(), dim.x(), CV_8UC1);
 
@@ -558,7 +586,8 @@ void MapHandler::GridToImg(cv::Mat& height_img, cv::Mat& var_img, cv::Mat& mask_
     point_density_mat_ = cv::Mat::zeros(dim.y(), dim.x(), CV_32FC1);
 
     for (const auto& point : ave_high_terrain_cloud_->points) {
-        Eigen::Vector3i sub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, 0.0f));
+        Eigen::Vector3i sub =
+            terrain_height_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, 0.0f));
         if (!terrain_height_grid_->InRange(sub)) continue;
 
         int r = sub.y();
@@ -615,7 +644,8 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
     // [方法1] 从有效格子出发，检测边界
     for (int r = 1; r < closed_mask.rows - 1; r++) {
         for (int c = 1; c < closed_mask.cols - 1; c++) {
-            if (closed_mask.at<uchar>(r, c) == 255 && point_density_mat_.at<float>(r, c) >= MIN_DENSITY) {
+            if (closed_mask.at<uchar>(r, c) == 255 &&
+                point_density_mat_.at<float>(r, c) >= MIN_DENSITY) {
                 // 检查8邻域（不只是4邻域）
                 bool has_invalid_neighbor = false;
                 for (int dr = -1; dr <= 1; dr++) {
@@ -664,7 +694,8 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
     cv::dilate(occlusion_boundary_mask_, occlusion_boundary_mask_, dilate_occlusion_kernel);
 
     if (FARUtil::IsDebug) {
-        ROS_INFO_THROTTLE(2.0, "MH: Occlusion boundary cells: %d", cv::countNonZero(occlusion_boundary_mask_));
+        ROS_INFO_THROTTLE(
+            2.0, "MH: Occlusion boundary cells: %d", cv::countNonZero(occlusion_boundary_mask_));
     }
 
     if (!occlusion_boundary_ready) {
@@ -673,8 +704,8 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
 
         if (dist_moved < 1.5f) {
             // 获取机器人在地形网格中的位置
-            Eigen::Vector3i robot_sub =
-                terrain_height_grid_->Pos2Sub(Eigen::Vector3d(FARUtil::robot_pos.x, FARUtil::robot_pos.y, 0.0f));
+            Eigen::Vector3i robot_sub = terrain_height_grid_->Pos2Sub(
+                Eigen::Vector3d(FARUtil::robot_pos.x, FARUtil::robot_pos.y, 0.0f));
             int robot_r = robot_sub.y();
             int robot_c = robot_sub.x();
 
@@ -682,20 +713,23 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
             for (int r = 0; r < occlusion_boundary_mask_.rows; r++) {
                 for (int c = 0; c < occlusion_boundary_mask_.cols; c++) {
                     // 计算格子到机器人的实际距离
-                    float dist = std::sqrt(std::pow(r - robot_r, 2) + std::pow(c - robot_c, 2)) * res;
+                    float dist =
+                        std::sqrt(std::pow(r - robot_r, 2) + std::pow(c - robot_c, 2)) * res;
                     if (dist < CLEAR_RADIUS) {
                         occlusion_boundary_mask_.at<uchar>(r, c) = 0;
                     }
                 }
             }
             if (FARUtil::IsDebug) {
-                ROS_INFO_THROTTLE(1.0, "MH: Occlusion boundary suppressed around robot (radius %.1fm, moved %.2fm)",
+                ROS_INFO_THROTTLE(1.0,
+                    "MH: Occlusion boundary suppressed around robot (radius %.1fm, moved %.2fm)",
                     CLEAR_RADIUS, dist_moved);
             }
         } else {
             occlusion_boundary_ready = true;
             if (FARUtil::IsDebug) {
-                ROS_INFO("MH: Occlusion boundary detection activated after %.2fm movement", dist_moved);
+                ROS_INFO(
+                    "MH: Occlusion boundary detection activated after %.2fm movement", dist_moved);
             }
         }
     }
@@ -788,8 +822,8 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
             int extended_valid_count = 0;
             for (int nr = -2; nr <= 2; nr++) {
                 for (int nc = -2; nc <= 2; nc++) {
-                    if (r + nr >= 0 && r + nr < closed_mask.rows && c + nc >= 0 && c + nc < closed_mask.cols &&
-                        closed_mask.at<uchar>(r + nr, c + nc) == 255) {
+                    if (r + nr >= 0 && r + nr < closed_mask.rows && c + nc >= 0 &&
+                        c + nc < closed_mask.cols && closed_mask.at<uchar>(r + nr, c + nc) == 255) {
                         extended_valid_count++;
                     }
                 }
@@ -840,15 +874,16 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
             const float CLEAR_RADIUS = 1.5f;
             for (int r = 0; r < slope_risk.rows; r++) {
                 for (int c = 0; c < slope_risk.cols; c++) {
-                    float dist = std::sqrt(std::pow(r - center_r, 2) + std::pow(c - center_c, 2)) * res;
+                    float dist =
+                        std::sqrt(std::pow(r - center_r, 2) + std::pow(c - center_c, 2)) * res;
                     if (dist < CLEAR_RADIUS) {
                         slope_risk.at<uchar>(r, c) = 0;
                     }
                 }
             }
             if (FARUtil::IsDebug) {
-                ROS_INFO_THROTTLE(
-                    1.0, "MH: Slope risk suppressed (radius %.1fm, moved %.2fm)", CLEAR_RADIUS, dist_moved);
+                ROS_INFO_THROTTLE(1.0, "MH: Slope risk suppressed (radius %.1fm, moved %.2fm)",
+                    CLEAR_RADIUS, dist_moved);
             }
         } else {
             risk_map_ready_ = true;
@@ -907,7 +942,8 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
             if (!is_first_classification_frame_ && prev_steep_slope_mask_.at<uchar>(r, c) > 100) {
                 // 上一帧是陡坡，需要降到下限才变缓坡
                 is_steep = (slope_val > SLOPE_LOW);
-            } else if (!is_first_classification_frame_ && prev_moderate_slope_mask_.at<uchar>(r, c) > 100) {
+            } else if (!is_first_classification_frame_ &&
+                       prev_moderate_slope_mask_.at<uchar>(r, c) > 100) {
                 // 上一帧是缓坡，需要升到上限才变陡坡
                 is_steep = (slope_val > SLOPE_HIGH);
             }
@@ -979,6 +1015,9 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
     steep_slope_cloud_output_->clear();
     moderate_slope_cloud_output_->clear();
 
+    // [新增] 获取当前时间戳
+    const float current_time = ros::Time::now().toSec() - FARUtil::systemStartTime;
+
     for (int r = 0; r < valid_mask.rows; r++) {
         for (int c = 0; c < valid_mask.cols; c++) {
             int ind = terrain_height_grid_->Sub2Ind(c, r, 0);
@@ -993,6 +1032,7 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
             pc.x = pos.x();
             pc.y = pos.y();
             pc.z = raw_h.at<float>(r, c);
+            pc.intensity = current_time;  // [新增] 时间戳
 
             if (obstacle_mask_.at<uchar>(r, c) > 100) {
                 p.r = 255;
@@ -1002,7 +1042,8 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
 
                 obstacle_cloud_output_->push_back(pc);
             } else if (occlusion_boundary_mask_.at<uchar>(r, c) > 100) {
-                bool is_map_edge = (r < 5 || r >= valid_mask.rows - 5 || c < 5 || c >= valid_mask.cols - 5);
+                bool is_map_edge =
+                    (r < 5 || r >= valid_mask.rows - 5 || c < 5 || c >= valid_mask.cols - 5);
                 if (is_map_edge) {
                     p.r = 128;
                     p.g = 128;
@@ -1046,7 +1087,8 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
     }
 
     if (FARUtil::IsDebug) {
-        ROS_INFO_THROTTLE(2.0, "MH: Terrain - Obstacle:%lu Occlusion:%lu Steep:%lu Moderate:%lu Flat:%lu",
+        ROS_INFO_THROTTLE(2.0,
+            "MH: Terrain - Obstacle:%lu Occlusion:%lu Steep:%lu Moderate:%lu Flat:%lu",
             obstacle_cloud_->size(), occlusion_cloud_->size(), steep_slope_cloud_->size(),
             moderate_slope_cloud_->size(), flat_terrain_cloud_rgb_->size());
     }
@@ -1089,7 +1131,8 @@ void MapHandler::ComputeTerrainRiskAttributes(const PointCloudPtr& terrainHeight
 
     // 遍历 ave_high_terrain_cloud_，标记可通行区域
     for (const auto& point : ave_high_terrain_cloud_->points) {
-        Eigen::Vector3i sub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, 0.0f));
+        Eigen::Vector3i sub =
+            terrain_height_grid_->Pos2Sub(Eigen::Vector3d(point.x, point.y, 0.0f));
         if (!terrain_height_grid_->InRange(sub)) continue;
 
         int r = sub.y();
@@ -1131,7 +1174,8 @@ void MapHandler::PublishRiskMapViz() {
                 p.b = 0;  // 红色  高度差
             } else if (occlusion_boundary_mask_.at<uchar>(r, c) > 100) {
                 // 检查是否在地图边缘
-                bool is_map_edge = (r < 5 || r >= valid_mask.rows - 5 || c < 5 || c >= valid_mask.cols - 5);
+                bool is_map_edge =
+                    (r < 5 || r >= valid_mask.rows - 5 || c < 5 || c >= valid_mask.cols - 5);
                 if (is_map_edge) {
                     p.r = 0;
                     p.g = 0;

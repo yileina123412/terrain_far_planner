@@ -23,6 +23,8 @@ struct MapHandlerParams {
 class MapHandler {
 public:
     static std::unique_ptr<grid_ns::Grid<std::vector<float>>> terrain_height_grid_;
+    // 记录地形点云每个格子平均高度
+    static std::unique_ptr<grid_ns::Grid<float>> terrain_avg_height_grid_;
     PointCloudPtr ave_high_terrain_cloud_;
     static PointKdTreePtr kdtree_terrain_clould_;
 
@@ -68,6 +70,8 @@ public:
      * @param maxH[out] The maximal terrain height in the radius
      * @param is_match[out] Whether or not find terrain association in radius
      * @return The average terrain height
+     * 在给定点 p 的二维平面半径 radius 范围内，利用 KdTree
+     * 搜索所有地形平均高度点，返回这些点的平均高度，同时输出该范围内的最小高度、最大高度，并指示是否找到匹配点。
      */
     template <typename Position>
     static inline float NearestHeightOfRadius(
@@ -82,7 +86,8 @@ public:
             float avgH = kdtree_terrain_clould_->getInputCloud()->points[pIdxK[0]].intensity;
             minH = maxH = avgH;
             for (int i = 1; i < pIdxK.size(); i++) {
-                const float temp = kdtree_terrain_clould_->getInputCloud()->points[pIdxK[i]].intensity;
+                const float temp =
+                    kdtree_terrain_clould_->getInputCloud()->points[pIdxK[i]].intensity;
                 if (temp < minH) minH = temp;
                 if (temp > maxH) maxH = temp;
                 avgH += temp;
@@ -99,7 +104,8 @@ public:
      */
     void UpdateObsCloudGrid(const PointCloudPtr& obsCloudInOut);
     void UpdateFreeCloudGrid(const PointCloudPtr& freeCloudIn);
-    void UpdateTerrainHeightGrid(const PointCloudPtr& freeCloudIn, const PointCloudPtr& terrainHeightOut);
+    void UpdateTerrainHeightGrid(
+        const PointCloudPtr& freeCloudIn, const PointCloudPtr& terrainHeightOut);
 
     void CalculateAveHigh();
     /** Extract Surrounding Free & Obs clouds
@@ -114,8 +120,8 @@ public:
      * @param type choose free or obstacle cloud for extraction
      * @param is_large whether or not using the surrounding cells
      */
-    void GetCloudOfPoint(
-        const Point3D& center, const PointCloudPtr& CloudOut, const CloudType& type, const bool& is_large);
+    void GetCloudOfPoint(const Point3D& center, const PointCloudPtr& CloudOut,
+        const CloudType& type, const bool& is_large);
 
     /**
      * Get neihbor cells center positions
@@ -213,11 +219,13 @@ public:
     }
 
     // 根据世界坐标查询梯度向量
-    static inline bool GetGradientAtPosition(const Point3D& world_pos, float& gx, float& gy, float& slope) {
+    static inline bool GetGradientAtPosition(
+        const Point3D& world_pos, float& gx, float& gy, float& slope) {
         if (!terrain_height_grid_) return false;
 
         // 世界坐标 → 网格索引
-        Eigen::Vector3i sub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(world_pos.x, world_pos.y, 0.0f));
+        Eigen::Vector3i sub =
+            terrain_height_grid_->Pos2Sub(Eigen::Vector3d(world_pos.x, world_pos.y, 0.0f));
         int r = sub.y();
         int c = sub.x();
 
@@ -237,20 +245,24 @@ public:
         slope = slope_mat.at<float>(r, c);
         return true;
     }
-
+    // 根据位置获得当前位置的地形类型
     static inline TerrainType GetTerrainTypeAt(const Point3D& pos) {
         Eigen::Vector3i sub = terrain_height_grid_->Pos2Sub(Eigen::Vector3d(pos.x, pos.y, 0.0f));
         int r = sub.y();
         int c = sub.x();
-        if (r < 0 || r >= obstacle_mask_.rows || c < 0 || c >= obstacle_mask_.cols) return TERRAIN_UNKNOWN;
+        if (r < 0 || r >= obstacle_mask_.rows || c < 0 || c >= obstacle_mask_.cols)
+            return TERRAIN_UNKNOWN;
 
-        if (obstacle_mask_.at<uchar>(r, c) > 100) return TERRAIN_OBSTACLE;
-        if (steep_slope_mask_.at<uchar>(r, c) > 100) return TERRAIN_STEEP;
-        if (moderate_slope_mask_.at<uchar>(r, c) > 100) return TERRAIN_MODERATE;
-        if (flat_terrain_mask_.at<uchar>(r, c) > 100) return TERRAIN_FLAT;
-        if (occlusion_boundary_mask_.at<uchar>(r, c) > 100) return TERRAIN_OCCLUSION;  //
+        if (obstacle_mask_.at<uchar>(r, c) > 100) return TERRAIN_OBSTACLE;        // 障碍物
+        if (steep_slope_mask_.at<uchar>(r, c) > 100) return TERRAIN_STEEP;        // 陡坡内部
+        if (moderate_slope_mask_.at<uchar>(r, c) > 100) return TERRAIN_MODERATE;  // 缓坡
+        if (flat_terrain_mask_.at<uchar>(r, c) > 100) return TERRAIN_FLAT;        // 平地
+        // if (occlusion_boundary_mask_.at<uchar>(r, c) > 100) return TERRAIN_OCCLUSION;  //
+        // 前沿区域
 
-        return TERRAIN_UNKNOWN;
+        // return TERRAIN_UNKNOWN;
+        // 如果没有的话，默认是平地
+        return TERRAIN_FLAT;
     }
 
 private:
@@ -304,7 +316,8 @@ private:
     void SetTerrainHeightGridOrigin(const Point3D& robot_pos);
 
     //
-    inline void AssignFlatTerrainCloud(const PointCloudPtr& terrainRef, PointCloudPtr& terrainFlatOut) {
+    inline void AssignFlatTerrainCloud(
+        const PointCloudPtr& terrainRef, PointCloudPtr& terrainFlatOut) {
         const int N = terrainRef->size();
         terrainFlatOut->resize(N);
         for (int i = 0; i < N; i++) {
@@ -314,7 +327,8 @@ private:
         }
     }
 
-    inline void Expansion2D(const Eigen::Vector3i& csub, std::vector<Eigen::Vector3i>& subs, const int& n) {
+    inline void Expansion2D(
+        const Eigen::Vector3i& csub, std::vector<Eigen::Vector3i>& subs, const int& n) {
         subs.clear();
         for (int ix = -n; ix <= n; ix++) {
             for (int iy = -n; iy <= n; iy++) {
@@ -327,10 +341,12 @@ private:
 
     void ObsNeighborCloudWithTerrain(
         std::unordered_set<int>& neighbor_obs, std::unordered_set<int>& extend_terrain_obs);
-
-    std::unordered_set<int> neighbor_free_indices_;        // surrounding free cloud grid indices stack
-    static std::unordered_set<int> neighbor_obs_indices_;  // surrounding obs cloud grid indices stack
-    static std::unordered_set<int> extend_obs_indices_;    // extended surrounding obs cloud grid indices stack
+    // 这个邻居范围就是传感器半径，半径30m
+    std::unordered_set<int> neighbor_free_indices_;  // surrounding free cloud grid indices stack
+    static std::unordered_set<int>
+        neighbor_obs_indices_;  // surrounding obs cloud grid indices stack
+    static std::unordered_set<int>
+        extend_obs_indices_;  // extended surrounding obs cloud grid indices stack
 
     std::vector<int> global_visited_induces_;
     std::vector<int> util_obs_modified_list_;

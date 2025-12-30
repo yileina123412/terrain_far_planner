@@ -22,7 +22,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: terrain/obstacle
+    SyncSource: 缓坡
   - Class: rviz/ControlPanel
     Name: ControlPanel
 Preferences:
@@ -125,34 +125,6 @@ Visualization Manager:
       Size (m): 0.009999999776482582
       Style: Points
       Topic: /explored_areas
-      Unreliable: false
-      Use Fixed Frame: true
-      Use rainbow: true
-      Value: false
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Autocompute Value Bounds:
-        Max Value: 10
-        Min Value: -10
-        Value: true
-      Axis: Z
-      Channel Name: intensity
-      Class: rviz/PointCloud2
-      Color: 255; 255; 255
-      Color Transformer: Intensity
-      Decay Time: 0
-      Enabled: false
-      Invert Rainbow: false
-      Max Color: 255; 255; 255
-      Min Color: 0; 0; 0
-      Name: Trajectory
-      Position Transformer: XYZ
-      Queue Size: 10
-      Selectable: true
-      Size (Pixels): 7
-      Size (m): 0.009999999776482582
-      Style: Points
-      Topic: /trajectory
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
@@ -269,14 +241,6 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: false
-    - Class: rviz/MarkerArray
-      Enabled: false
-      Marker Topic: /viz_viewpoint_extend_topic
-      Name: ViewpointExtend
-      Namespaces:
-        {}
-      Queue Size: 100
-      Value: false
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -304,14 +268,6 @@ Visualization Manager:
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
-      Value: false
-    - Class: rviz/MarkerArray
-      Enabled: false
-      Marker Topic: /viz_contour_topic
-      Name: ctnode
-      Namespaces:
-        {}
-      Queue Size: 100
       Value: false
     - Alpha: 1
       Autocompute Intensity Bounds: true
@@ -482,16 +438,13 @@ Visualization Manager:
       Use rainbow: true
       Value: true
     - Class: rviz/MarkerArray
-      Enabled: true
+      Enabled: false
       Marker Topic: /viz_contour_topic
       Name: ctnode
       Namespaces:
-        angle_direct: true
-        contour: true
-        polygon_vertex: true
-        vertex_angle: true
+        {}
       Queue Size: 100
-      Value: true
+      Value: false
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -532,7 +485,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: RGB8
       Decay Time: 0
-      Enabled: false
+      Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Min Color: 0; 0; 0
@@ -547,7 +500,7 @@ Visualization Manager:
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
-      Value: false
+      Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -577,39 +530,35 @@ Visualization Manager:
       Use rainbow: true
       Value: false
     - Class: rviz/MarkerArray
-      Enabled: true
+      Enabled: false
       Marker Topic: /viz_steep_clusters_topic
       Name: 陡坡提取
       Namespaces:
-        steep_boundary_0: true
-        steep_boundary_1: true
-        steep_boundary_2: true
-        steep_inner_0: true
-        steep_inner_1: true
-        steep_inner_2: true
+        {}
       Queue Size: 100
-      Value: true
+      Value: false
     - Class: rviz/MarkerArray
-      Enabled: true
+      Enabled: false
       Marker Topic: /viz_moderate_clusters_topic
       Name: 缓坡采样点
       Namespaces:
-        moderate_boundary_0: true
-        moderate_boundary_1: true
-        moderate_boundary_2: true
-        moderate_boundary_3: true
-        moderate_boundary_4: true
-        moderate_boundary_5: true
-        moderate_boundary_6: true
-        moderate_boundary_7: true
-        moderate_inner_0: true
-        moderate_inner_1: true
-        moderate_inner_2: true
-        moderate_inner_3: true
-        moderate_inner_4: true
-        moderate_inner_5: true
-        moderate_inner_6: true
-        moderate_inner_7: true
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: false
+      Marker Topic: /viz_node_topic
+      Name: 导航点
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /viz_graph_topic
+      Name: 导航图
+      Namespaces:
+        {}
       Queue Size: 100
       Value: true
   Enabled: true
@@ -630,7 +579,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 33.40696716308594
+      Distance: 21.329248428344727
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -638,9 +587,9 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 8.962373733520508
-        Y: 11.42943286895752
-        Z: 1.2871171236038208
+        X: 3.814556360244751
+        Y: 5.431100845336914
+        Z: 5.5102362632751465
       Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
@@ -648,7 +597,7 @@ Visualization Manager:
       Near Clip Distance: 0.009999999776482582
       Pitch: 1.5697963237762451
       Target Frame: map
-      Yaw: 4.690425395965576
+      Yaw: 4.702327251434326
     Saved: ~
 Window Geometry:
   ControlPanel:

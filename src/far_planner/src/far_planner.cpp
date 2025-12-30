@@ -10,14 +10,17 @@
 
 void FARMaster::Init() {
     /* initialize subscriber and publisher */
-    reset_graph_sub_ = nh.subscribe("/reset_visibility_graph", 5, &FARMaster::ResetGraphCallBack, this);
+    reset_graph_sub_ =
+        nh.subscribe("/reset_visibility_graph", 5, &FARMaster::ResetGraphCallBack, this);
     odom_sub_ = nh.subscribe("/odom_world", 5, &FARMaster::OdomCallBack, this);
     terrain_sub_ = nh.subscribe("/local_map_large", 1, &FARMaster::TerrainCallBack, this);
     scan_sub_ = nh.subscribe("/scan_cloud", 5, &FARMaster::ScanCallBack, this);
     waypoint_sub_ = nh.subscribe("/goal_point", 1, &FARMaster::WaypointCallBack, this);
-    terrain_local_sub_ = nh.subscribe("/terrain_local_cloud", 1, &FARMaster::TerrainLocalCallBack, this);
+    terrain_local_sub_ =
+        nh.subscribe("/terrain_local_cloud", 1, &FARMaster::TerrainLocalCallBack, this);
     joy_command_sub_ = nh.subscribe("/joy", 5, &FARMaster::JoyCommandCallBack, this);
-    update_command_sub_ = nh.subscribe("/update_visibility_graph", 5, &FARMaster::UpdateCommandCallBack, this);
+    update_command_sub_ =
+        nh.subscribe("/update_visibility_graph", 5, &FARMaster::UpdateCommandCallBack, this);
     goal_pub_ = nh.advertise<geometry_msgs::PointStamped>("/way_point", 5);
     boundary_pub_ = nh.advertise<geometry_msgs::PolygonStamped>("/navigation_boundary", 5);
     // Timers
@@ -52,7 +55,8 @@ void FARMaster::Init() {
 
     /*init path generation thred callback*/
     const float duration_time = 0.99f / master_params_.main_run_freq;
-    planning_event_ = nh.createTimer(ros::Duration(duration_time), &FARMaster::PlanningCallBack, this);
+    planning_event_ =
+        nh.createTimer(ros::Duration(duration_time), &FARMaster::PlanningCallBack, this);
 
     /* init Dynamic Planner Processing Objects */
     contour_detector_.Init(cdetect_params_);
@@ -151,19 +155,21 @@ void FARMaster::Loop() {
         if (is_reset_env_) {
             this->ResetEnvironmentAndGraph();
             is_reset_env_ = false;
-            if (FARUtil::IsDebug) ROS_WARN("****************** Graph and Env Reset ******************");
+            if (FARUtil::IsDebug)
+                ROS_WARN("****************** Graph and Env Reset ******************");
             loop_rate.sleep();  // skip this iteration
             continue;
         }
         /* Process callback functions */
         ros::spinOnce();
         if (!this->PreconditionCheck()) {
-            ROS_WARN_THROTTLE(
-                5.0, "Waiting for preconditions: is_cloud_init_=%d, is_odom_init_=%d", is_cloud_init_, is_odom_init_);
+            ROS_WARN_THROTTLE(5.0, "Waiting for preconditions: is_cloud_init_=%d, is_odom_init_=%d",
+                is_cloud_init_, is_odom_init_);
             loop_rate.sleep();
             continue;
         }
         /* add main process after this line */
+        // 创建/更新导航节点
         graph_manager_.UpdateRobotPosition(robot_pos_);
         odom_node_ptr_ = graph_manager_.GetOdomNode();
         if (odom_node_ptr_ == NULL) {
@@ -176,7 +182,8 @@ void FARMaster::Loop() {
 
         // 提取障碍物的边界
         PointCloudPtr obstacle_cloud = map_handler_.GetObsOutCloud();
-        contour_detector_.BuildTerrainImgAndExtractContour(odom_node_ptr_, obstacle_cloud, realworld_contour_);
+        contour_detector_.BuildTerrainImgAndExtractContour(
+            odom_node_ptr_, obstacle_cloud, realworld_contour_);
         steep_cloud_ = map_handler_.GetSteepOutCloud();
         // 提取陡坡的边界
         contour_detector_.ExtractSteepSlopePoints(
@@ -187,50 +194,57 @@ void FARMaster::Loop() {
             moderate_cloud_, odom_node_ptr_, moderate_boundary_clusters_, moderate_inner_clusters_);
         // 把障碍物点云加入了ctnode
         contour_graph_.UpdateContourGraph(odom_node_ptr_, realworld_contour_);
-        contour_graph_.UpdateContourGraphTerrain(
-            steep_boundary_clusters_, steep_inner_clusters_, moderate_boundary_clusters_, moderate_inner_clusters_);
+        contour_graph_.UpdateContourGraphTerrain(steep_boundary_clusters_, steep_inner_clusters_,
+            moderate_boundary_clusters_, moderate_inner_clusters_);
         if (is_graph_init_) {
             if (!FARUtil::IsDebug) printf("\033[2K");
             std::cout << "    "
-                      << "Local V-Graph Updated. Number of local vertices: " << ContourGraph::contour_graph_.size()
-                      << std::endl;
+                      << "Local V-Graph Updated. Number of local vertices: "
+                      << ContourGraph::contour_graph_.size() << std::endl;
         }
         /* Adjust heights with terrain */
-        // map_handler_.AdjustCTNodeHeight(ContourGraph::contour_graph_);
-        // map_handler_.AdjustNodesHeight(nav_graph_);
+        // 调整高度，基本调整为+车的高度
+        map_handler_.AdjustCTNodeHeight(ContourGraph::contour_graph_);
+        map_handler_.AdjustNodesHeight(nav_graph_);
         // Truncate for local range nodes
+        // 更新局部范围内节点栈: near nodes, wide near nodes etc.,
+        // 根据距离和导航点性质进行分类
         graph_manager_.UpdateGlobalNearNodes();
         near_nav_graph_ = graph_manager_.GetExtendLocalNode();
         // Match near nav nodes with contour
+        // 匹配导航点和ct点，提取新的ct点
         contour_graph_.MatchContourWithNavGraph(nav_graph_, near_nav_graph_, new_ctnodes_);
-        if (master_params_.is_visual_opencv) {
-            FARUtil::ConvertCTNodeStackToPCL(new_ctnodes_, new_vertices_ptr_);
-            cv::Mat cloud_img = contour_detector_.GetCloudImgMat();
-            contour_detector_.ShowCornerImage(cloud_img, new_vertices_ptr_);
-        }
+
         /* update planner graph */
         new_nodes_.clear();
+        // 将ct点转化为导航点
         if (!is_stop_update_ && graph_manager_.ExtractGraphNodes(new_ctnodes_)) {
             new_nodes_ = graph_manager_.GetNewNodes();
         }
         if (is_graph_init_) {
             if (!FARUtil::IsDebug) printf("\033[2K");
             std::cout << "    "
-                      << "Number of new vertices adding to global V-Graph: " << new_nodes_.size() << std::endl;
+                      << "Number of new vertices adding to global V-Graph: " << new_nodes_.size()
+                      << std::endl;
         }
         /* Graph Updating */
+        // 更新导航图的连接
         graph_manager_.UpdateNavGraph(new_nodes_, is_stop_update_, clear_nodes_);
-        runtimer_.data = FARUtil::Timer.end_time("Total V-Graph Update", is_graph_init_) / 1000.f;  // Unit: second
-        // runtimer_.data = FARUtil::Timer.end_time("Total V-Graph Update", is_graph_init_); // Unit: ms
+        runtimer_.data = FARUtil::Timer.end_time("Total V-Graph Update", is_graph_init_) /
+                         1000.f;  // Unit: second
+        // runtimer_.data = FARUtil::Timer.end_time("Total V-Graph Update", is_graph_init_); //
+        // Unit: ms
         runtime_pub_.publish(runtimer_);
         /* Update v-graph in other modules */
         nav_graph_ = graph_manager_.GetNavGraph();
         // std::cout << "    "
-        //               << "Number of all vertices adding to global V-Graph: " << nav_graph_.size() << std::endl;
+        //               << "Number of all vertices adding to global V-Graph: " << nav_graph_.size()
+        //               << std::endl;
         if (is_graph_init_) {
             if (!FARUtil::IsDebug) printf("\033[2K");
             std::cout << "    "
-                      << "Global V-Graph Updated. Number of global vertices: " << nav_graph_.size() << std::endl;
+                      << "Global V-Graph Updated. Number of global vertices: " << nav_graph_.size()
+                      << std::endl;
         }
         contour_graph_.ExtractGlobalContours();      // Global Polygon Update
         graph_planner_.UpdaetVGraph(nav_graph_);     // Graph Planner Update
@@ -242,20 +256,26 @@ void FARMaster::Loop() {
         /* Viz Navigation Graph */
         const NavNodePtr last_internav_ptr = graph_manager_.GetLastInterNavNode();
         if (last_internav_ptr != NULL) {
-            planner_viz_.VizPoint3D(last_internav_ptr->position, "last_nav_node", VizColor::MAGNA, 1.0);
+            planner_viz_.VizPoint3D(
+                last_internav_ptr->position, "last_nav_node", VizColor::MAGNA, 1.0);
         }
-        planner_viz_.VizNodes(nav_graph_, "clear_nodes", VizColor::ORANGE);
-        // planner_viz_.VizNodes(graph_manager_.GetOutContourNodes(), "out_contour", VizColor::YELLOW);
+        // planner_viz_.VizNodes(nav_graph_, "clear_nodes", VizColor::ORANGE);
+        // planner_viz_.VizNodes(graph_manager_.GetOutContourNodes(), "out_contour",
+        // VizColor::YELLOW);
         planner_viz_.VizPoint3D(FARUtil::free_odom_p, "free_odom_position", VizColor::ORANGE, 1.0);
-        // planner_viz_.VizGraph(nav_graph_);
+        planner_viz_.VizGraph(nav_graph_);
         planner_viz_.VizContourGraph(ContourGraph::contour_graph_);
-        // planner_viz_.VizGlobalPolygons(ContourGraph::global_contour_, ContourGraph::unmatched_contour_);
+        // planner_viz_.VizContourGraph(new_ctnodes_);
+        // planner_viz_.VizGlobalPolygons(ContourGraph::global_contour_,
+        // ContourGraph::unmatched_contour_);
         planner_viz_.VizSteepSlopeClusters(steep_boundary_clusters_, steep_inner_clusters_);
-        planner_viz_.VizModerateSlopeClusters(moderate_boundary_clusters_, moderate_inner_clusters_);
+        planner_viz_.VizModerateSlopeClusters(
+            moderate_boundary_clusters_, moderate_inner_clusters_);
         planner_viz_.VizObstacleClusters(realworld_contour_);
         if (is_graph_init_) {
             if (FARUtil::IsDebug) {
-                std::cout << " ========================================================== " << std::endl;
+                std::cout << " ========================================================== "
+                          << std::endl;
             } else {  // cleanup outputs in terminal
                 // for (int i = 0; i < 6; i++) {
                 //     printf("\033[A");
@@ -313,7 +333,8 @@ void FARMaster::PlanningCallBack(const ros::TimerEvent& event) {
     //     goal_waypoint_stamped_.header.stamp = ros::Time::now();
     //     bool is_current_free_nav = false;
     //     bool is_reach_goal = false;
-    //     if (graph_planner_.PathToGoal(goal_ptr, global_path, nav_node_ptr_, current_free_goal, is_planning_fails,
+    //     if (graph_planner_.PathToGoal(goal_ptr, global_path, nav_node_ptr_, current_free_goal,
+    //     is_planning_fails,
     //             is_reach_goal, is_current_free_nav) &&
     //         nav_node_ptr_ != NULL) {
     //         Point3D waypoint = nav_node_ptr_->position;
@@ -360,15 +381,18 @@ void FARMaster::LocalBoundaryHandler(const std::vector<PointPair>& local_boundar
     if (!master_params_.is_pub_boundary || local_boundary.empty()) return;
 }
 
-Point3D FARMaster::ProjectNavWaypoint(const NavNodePtr& nav_node_ptr, const NavNodePtr& last_point_ptr) {
+Point3D FARMaster::ProjectNavWaypoint(
+    const NavNodePtr& nav_node_ptr, const NavNodePtr& last_point_ptr) {
     bool is_momentum = false;
     if (last_point_ptr == nav_node_ptr ||
-        (last_point_ptr != NULL && (last_point_ptr->position - nav_node_ptr_->position).norm() < FARUtil::kNearDist)) {
+        (last_point_ptr != NULL &&
+            (last_point_ptr->position - nav_node_ptr_->position).norm() < FARUtil::kNearDist)) {
         is_momentum = true;
     }
     Point3D waypoint = nav_node_ptr->position;
     float free_dist = master_params_.local_planner_range;
-    const Point3D extend_p = this->ExtendViewpointOnObsCloud(nav_node_ptr_, FARUtil::surround_obs_cloud_, free_dist);
+    const Point3D extend_p =
+        this->ExtendViewpointOnObsCloud(nav_node_ptr_, FARUtil::surround_obs_cloud_, free_dist);
     free_dist = std::max(free_dist, master_params_.robot_dim * 2.5f);
     if (master_params_.is_viewpoint_extend) {
         waypoint = extend_p;
@@ -400,9 +424,12 @@ Point3D FARMaster::ProjectNavWaypoint(const NavNodePtr& nav_node_ptr, const NavN
 
 Point3D FARMaster::ExtendViewpointOnObsCloud(
     const NavNodePtr& nav_node_ptr, const PointCloudPtr& obsCloudIn, float& free_dist) {
-    if (nav_node_ptr_->free_direct != NodeFreeDirect::CONVEX || obsCloudIn->empty()) return nav_node_ptr_->position;
-    FARUtil::CropPCLCloud(obsCloudIn, viewpoint_around_ptr_, nav_node_ptr_->position, free_dist + FARUtil::kNearDist);
-    float maxR = std::min((nav_node_ptr_->position - robot_pos_).norm(), free_dist) - FARUtil::kNearDist;
+    if (nav_node_ptr_->free_direct != NodeFreeDirect::CONVEX || obsCloudIn->empty())
+        return nav_node_ptr_->position;
+    FARUtil::CropPCLCloud(
+        obsCloudIn, viewpoint_around_ptr_, nav_node_ptr_->position, free_dist + FARUtil::kNearDist);
+    float maxR =
+        std::min((nav_node_ptr_->position - robot_pos_).norm(), free_dist) - FARUtil::kNearDist;
     maxR = std::max(maxR, 0.0f);
     bool is_wall = false;
     const Point3D direct = -FARUtil::SurfTopoDirect(nav_node_ptr_->surf_dirs, is_wall);
@@ -417,18 +444,21 @@ Point3D FARMaster::ExtendViewpointOnObsCloud(
             // ray tracing
             Point3D start_p = waypoint + direct * FARUtil::kNearDist;
             float ray_dist = FARUtil::kNearDist;
-            bool is_occupied = FARUtil::PointInXCounter(start_p, R, kdtree_viewpoint_obs_cloud_) > N_Thred;
+            bool is_occupied =
+                FARUtil::PointInXCounter(start_p, R, kdtree_viewpoint_obs_cloud_) > N_Thred;
             waypoint = start_p;
             while (!is_occupied && ray_dist < free_dist) {
                 start_p = start_p + direct * FARUtil::kNearDist;
                 ray_dist += FARUtil::kNearDist;
-                is_occupied = FARUtil::PointInXCounter(start_p, R, kdtree_viewpoint_obs_cloud_) > N_Thred;
+                is_occupied =
+                    FARUtil::PointInXCounter(start_p, R, kdtree_viewpoint_obs_cloud_) > N_Thred;
                 if (ray_dist < maxR) {
                     waypoint = start_p;
                 }
             }
             if (is_occupied) {
-                waypoint = (nav_node_ptr_->position + waypoint - direct * FARUtil::kNearDist) / 2.0f;
+                waypoint =
+                    (nav_node_ptr_->position + waypoint - direct * FARUtil::kNearDist) / 2.0f;
                 waypoint.z = nav_node_ptr_->position.z;
                 free_dist = ray_dist - FARUtil::kNearDist;
             }
@@ -465,9 +495,11 @@ void FARMaster::LoadROSParams() {
     nh.param<bool>(master_prefix + "is_static_env", master_params_.is_static_env, true);
     nh.param<bool>(master_prefix + "is_pub_boundary", master_params_.is_pub_boundary, true);
     nh.param<bool>(master_prefix + "is_debug_output", master_params_.is_debug_output, false);
-    nh.param<bool>(master_prefix + "is_attempt_autoswitch", master_params_.is_attempt_autoswitch, true);
+    nh.param<bool>(
+        master_prefix + "is_attempt_autoswitch", master_params_.is_attempt_autoswitch, true);
     nh.param<std::string>(master_prefix + "world_frame", master_params_.world_frame, "map");
-    master_params_.terrain_range = std::min(master_params_.terrain_range, master_params_.sensor_range);
+    master_params_.terrain_range =
+        std::min(master_params_.terrain_range, master_params_.sensor_range);
 
     // map handler params
     nh.param<float>(map_prefix + "floor_height", map_params_.floor_height, 2.0);
@@ -497,7 +529,7 @@ void FARMaster::LoadROSParams() {
     FARUtil::kProjectDist = master_params_.voxel_dim;
     FARUtil::worldFrameId = master_params_.world_frame;
     FARUtil::kVizRatio = master_params_.viz_ratio;
-    FARUtil::kTolerZ = map_params_.floor_height - FARUtil::kHeightVoxel;
+    FARUtil::kTolerZ = (map_params_.floor_height - FARUtil::kHeightVoxel) * 8;
     FARUtil::kCellLength = map_params_.cell_length;
     FARUtil::kCellHeight = map_params_.cell_height;
     FARUtil::kAcceptAlign = FARUtil::kAcceptAlign / 180.0f * M_PI;
@@ -511,7 +543,7 @@ void FARMaster::LoadROSParams() {
     FARUtil::kMarginDist = master_params_.sensor_range - FARUtil::kMatchDist;
     FARUtil::kMarginHeight = FARUtil::kTolerZ - FARUtil::kCellHeight / 2.0f;
     FARUtil::kTerrainRange = master_params_.terrain_range;
-    FARUtil::kLocalPlanRange = master_params_.local_planner_range;
+    FARUtil::kLocalPlanRange = master_params_.local_planner_range;  // 5m
 
     // graph planner params
     nh.param<float>(planner_prefix + "converge_distance", gp_params_.converge_dist, 1.0);
@@ -559,25 +591,39 @@ void FARMaster::LoadROSParams() {
     cdetect_params_.voxel_dim = master_params_.voxel_dim;
     // [新增] 陡坡处理参数
     nh.param<float>(cdetect_prefix + "steep_crop_radius", cdetect_params_.steep_crop_radius, 10.0f);
-    nh.param<float>(cdetect_prefix + "steep_cluster_tolerance", cdetect_params_.steep_cluster_tolerance, 0.5f);
-    nh.param<int>(cdetect_prefix + "steep_min_cluster_size", cdetect_params_.steep_min_cluster_size, 10);
-    nh.param<int>(cdetect_prefix + "steep_max_cluster_size", cdetect_params_.steep_max_cluster_size, 10000);
-    nh.param<float>(cdetect_prefix + "steep_boundary_sample_dist", cdetect_params_.steep_boundary_sample_dist, 0.3f);
-    nh.param<float>(cdetect_prefix + "steep_inner_voxel_size", cdetect_params_.steep_inner_voxel_size, 1.0f);
-    nh.param<float>(cdetect_prefix + "steep_concave_alpha", cdetect_params_.steep_concave_alpha, 1.0f);  // [新增]
-    nh.param<int>(cdetect_prefix + "steep_smooth_window", cdetect_params_.steep_smooth_window, 3);       // [新增]
     nh.param<float>(
-        cdetect_prefix + "steep_corner_angle_threshold", cdetect_params_.steep_corner_angle_threshold, 30.0f);
+        cdetect_prefix + "steep_cluster_tolerance", cdetect_params_.steep_cluster_tolerance, 0.5f);
+    nh.param<int>(
+        cdetect_prefix + "steep_min_cluster_size", cdetect_params_.steep_min_cluster_size, 10);
+    nh.param<int>(
+        cdetect_prefix + "steep_max_cluster_size", cdetect_params_.steep_max_cluster_size, 10000);
+    nh.param<float>(cdetect_prefix + "steep_boundary_sample_dist",
+        cdetect_params_.steep_boundary_sample_dist, 0.3f);
+    nh.param<float>(
+        cdetect_prefix + "steep_inner_voxel_size", cdetect_params_.steep_inner_voxel_size, 1.0f);
+    nh.param<float>(cdetect_prefix + "steep_concave_alpha", cdetect_params_.steep_concave_alpha,
+        1.0f);  // [新增]
+    nh.param<int>(
+        cdetect_prefix + "steep_smooth_window", cdetect_params_.steep_smooth_window, 3);  // [新增]
+    nh.param<float>(cdetect_prefix + "steep_corner_angle_threshold",
+        cdetect_params_.steep_corner_angle_threshold, 30.0f);
     // [新增] 缓坡处理参数
-    nh.param<float>(cdetect_prefix + "moderate_crop_radius", cdetect_params_.moderate_crop_radius, 20.0f);
-    nh.param<float>(cdetect_prefix + "moderate_cluster_tolerance", cdetect_params_.moderate_cluster_tolerance, 1.0f);
-    nh.param<int>(cdetect_prefix + "moderate_min_cluster_size", cdetect_params_.moderate_min_cluster_size, 30);
-    nh.param<int>(cdetect_prefix + "moderate_max_cluster_size", cdetect_params_.moderate_max_cluster_size, 20000);
     nh.param<float>(
-        cdetect_prefix + "moderate_boundary_sample_dist", cdetect_params_.moderate_boundary_sample_dist, 4.0f);
-    nh.param<float>(cdetect_prefix + "moderate_inner_voxel_size", cdetect_params_.moderate_inner_voxel_size, 4.0f);
-    nh.param<float>(cdetect_prefix + "moderate_concave_alpha", cdetect_params_.moderate_concave_alpha, 2.0f);
-    nh.param<int>(cdetect_prefix + "moderate_smooth_window", cdetect_params_.moderate_smooth_window, 5);
+        cdetect_prefix + "moderate_crop_radius", cdetect_params_.moderate_crop_radius, 20.0f);
+    nh.param<float>(cdetect_prefix + "moderate_cluster_tolerance",
+        cdetect_params_.moderate_cluster_tolerance, 1.0f);
+    nh.param<int>(cdetect_prefix + "moderate_min_cluster_size",
+        cdetect_params_.moderate_min_cluster_size, 30);
+    nh.param<int>(cdetect_prefix + "moderate_max_cluster_size",
+        cdetect_params_.moderate_max_cluster_size, 20000);
+    nh.param<float>(cdetect_prefix + "moderate_boundary_sample_dist",
+        cdetect_params_.moderate_boundary_sample_dist, 4.0f);
+    nh.param<float>(cdetect_prefix + "moderate_inner_voxel_size",
+        cdetect_params_.moderate_inner_voxel_size, 4.0f);
+    nh.param<float>(
+        cdetect_prefix + "moderate_concave_alpha", cdetect_params_.moderate_concave_alpha, 2.0f);
+    nh.param<int>(
+        cdetect_prefix + "moderate_smooth_window", cdetect_params_.moderate_smooth_window, 5);
 }
 
 void FARMaster::OdomCallBack(const nav_msgs::OdometryConstPtr& msg) {
@@ -586,11 +632,14 @@ void FARMaster::OdomCallBack(const nav_msgs::OdometryConstPtr& msg) {
     tf::Pose tf_odom_pose;
     tf::poseMsgToTF(msg->pose.pose, tf_odom_pose);
     if (!FARUtil::IsSameFrameID(odom_frame, master_params_.world_frame)) {
-        if (FARUtil::IsDebug) ROS_WARN_ONCE("FARMaster: odom frame does NOT match with world frame!");
+        if (FARUtil::IsDebug)
+            ROS_WARN_ONCE("FARMaster: odom frame does NOT match with world frame!");
         tf::StampedTransform odom_to_world_tf_stamp;
         try {
-            tf_listener_->waitForTransform(master_params_.world_frame, odom_frame, ros::Time(0), ros::Duration(1.0));
-            tf_listener_->lookupTransform(master_params_.world_frame, odom_frame, ros::Time(0), odom_to_world_tf_stamp);
+            tf_listener_->waitForTransform(
+                master_params_.world_frame, odom_frame, ros::Time(0), ros::Duration(1.0));
+            tf_listener_->lookupTransform(
+                master_params_.world_frame, odom_frame, ros::Time(0), odom_to_world_tf_stamp);
             tf_odom_pose = odom_to_world_tf_stamp * tf_odom_pose;
         } catch (tf::TransformException ex) {
             ROS_ERROR("Tracking odom TF lookup: %s", ex.what());
@@ -616,7 +665,8 @@ void FARMaster::OdomCallBack(const nav_msgs::OdometryConstPtr& msg) {
     is_odom_init_ = true;
 }
 
-void FARMaster::PrcocessCloud(const sensor_msgs::PointCloud2ConstPtr& pc, const PointCloudPtr& cloudOut) {
+void FARMaster::PrcocessCloud(
+    const sensor_msgs::PointCloud2ConstPtr& pc, const PointCloudPtr& cloudOut) {
     pcl::PointCloud<PCLPoint> temp_cloud;
     pcl::fromROSMsg(*pc, temp_cloud);
     cloudOut->clear(), *cloudOut = temp_cloud;
@@ -626,9 +676,11 @@ void FARMaster::PrcocessCloud(const sensor_msgs::PointCloud2ConstPtr& pc, const 
     std::string cloud_frame = pc->header.frame_id;
     FARUtil::RemoveNanInfPoints(cloudOut);
     if (!FARUtil::IsSameFrameID(cloud_frame, master_params_.world_frame)) {
-        if (FARUtil::IsDebug) ROS_WARN_ONCE("FARMaster: cloud frame does NOT match with world frame!");
+        if (FARUtil::IsDebug)
+            ROS_WARN_ONCE("FARMaster: cloud frame does NOT match with world frame!");
         try {
-            FARUtil::TransformPCLFrame(cloud_frame, master_params_.world_frame, tf_listener_, cloudOut);
+            FARUtil::TransformPCLFrame(
+                cloud_frame, master_params_.world_frame, tf_listener_, cloudOut);
         } catch (tf::TransformException ex) {
             ROS_ERROR("Tracking cloud TF lookup: %s", ex.what());
             return;
@@ -645,7 +697,8 @@ void FARMaster::ScanCallBack(const sensor_msgs::PointCloud2ConstPtr& scan_pc) {
 void FARMaster::TerrainLocalCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     if (master_params_.is_static_env) return;
     this->PrcocessCloud(pc, local_terrain_ptr_);
-    FARUtil::ExtractFreeAndObsCloud(local_terrain_ptr_, FARUtil::local_terrain_free_, FARUtil::local_terrain_obs_);
+    FARUtil::ExtractFreeAndObsCloud(
+        local_terrain_ptr_, FARUtil::local_terrain_free_, FARUtil::local_terrain_obs_);
 }
 
 void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
@@ -656,25 +709,28 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     if (!is_stop_update_) {
         this->PrcocessCloud(pc, temp_cloud_ptr_);
         FARUtil::CropBoxCloud(temp_cloud_ptr_, robot_pos_,
-            Point3D(master_params_.terrain_range, master_params_.terrain_range, master_params_.terrain_range));
+            Point3D(master_params_.terrain_range, master_params_.terrain_range,
+                master_params_.terrain_range));
         FARUtil::ExtractFreeAndObsCloud(temp_cloud_ptr_, temp_free_ptr_, temp_obs_ptr_);
 
         map_handler_.UpdateTerrainHeightGrid(temp_cloud_ptr_, terrain_height_ptr_);
         temp_obs_ptr_->clear();
         // temp_obs_ptr_ = map_handler_.GetObsOutCloud();
-        PointCloudPtr obs_copy(new pcl::PointCloud<PCLPoint>());
         *temp_obs_ptr_ = *map_handler_.GetObsOutCloud();  // 创建副本
+        // *temp_obs_ptr_ += *map_handler_.GetSteepOutCloud();
+        // *temp_obs_ptr_ += *map_handler_.GetModerateOutCloud();
+
         map_handler_.UpdateObsCloudGrid(temp_obs_ptr_);
         map_handler_.UpdateFreeCloudGrid(temp_free_ptr_);
         // extract new points
-        FARUtil::ExtractNewObsPointCloud(temp_obs_ptr_, FARUtil::surround_obs_cloud_, FARUtil::cur_new_cloud_);
+        FARUtil::ExtractNewObsPointCloud(
+            temp_obs_ptr_, FARUtil::surround_obs_cloud_, FARUtil::cur_new_cloud_);
     } else {  // stop env update
         temp_cloud_ptr_->clear();
         FARUtil::cur_new_cloud_->clear();
     }
     // extract surround free cloud & update terrain height
     map_handler_.GetSurroundFreeCloud(FARUtil::surround_free_cloud_);
-    // map_handler_.UpdateTerrainHeightGrid(FARUtil::surround_free_cloud_, terrain_height_ptr_);
 
     temp_risk_cloud_ = map_handler_.GetRiskCloud();
     temp_risk_rgb_cloud_ = map_handler_.GetRiskRBGCloud();
@@ -684,7 +740,9 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     FARUtil::cur_dyobs_cloud_->clear();
 
     // create and update kdtrees
-    FARUtil::StackCloudByTime(FARUtil::cur_new_cloud_, FARUtil::stack_new_cloud_, FARUtil::kNewDecayTime);
+    FARUtil::StackCloudByTime(
+        FARUtil::cur_new_cloud_, FARUtil::stack_new_cloud_, FARUtil::kNewDecayTime);
+    // 更新新点的kdtree
     FARUtil::UpdateKdTrees(FARUtil::stack_new_cloud_);
 
     if (!FARUtil::surround_free_cloud_->empty()) is_cloud_init_ = true;
@@ -701,7 +759,8 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     PointStack neighbor_centers, occupancy_centers;
     map_handler_.GetNeighborCeilsCenters(neighbor_centers);
     map_handler_.GetOccupancyCeilsCenters(occupancy_centers);
-    planner_viz_.VizMapGrids(neighbor_centers, occupancy_centers, map_params_.cell_length, map_params_.cell_height);
+    planner_viz_.VizMapGrids(
+        neighbor_centers, occupancy_centers, map_params_.cell_length, map_params_.cell_height);
     // 五个地形图
     planner_viz_.VizRGBPointCloud(obstacle_pub_, map_handler_.obstacle_cloud_);
     planner_viz_.VizRGBPointCloud(occlusion_pub_, map_handler_.occlusion_cloud_);
@@ -718,8 +777,9 @@ void FARMaster::TerrainCallBack(const sensor_msgs::PointCloud2ConstPtr& pc) {
     }
 }
 
-void FARMaster::ExtractDynamicObsFromScan(const PointCloudPtr& scanCloudIn, const PointCloudPtr& obsCloudIn,
-    const PointCloudPtr& freeCloudIn, const PointCloudPtr& dyObsCloudOut) {
+void FARMaster::ExtractDynamicObsFromScan(const PointCloudPtr& scanCloudIn,
+    const PointCloudPtr& obsCloudIn, const PointCloudPtr& freeCloudIn,
+    const PointCloudPtr& dyObsCloudOut) {
     scan_handler_.ReInitGrids();
     scan_handler_.SetCurrentScanCloud(scanCloudIn, freeCloudIn);
     scan_handler_.ExtractDyObsCloud(obsCloudIn, dyObsCloudOut);
@@ -727,14 +787,17 @@ void FARMaster::ExtractDynamicObsFromScan(const PointCloudPtr& scanCloudIn, cons
 
 void FARMaster::WaypointCallBack(const geometry_msgs::PointStamped& route_goal) {
     if (!is_graph_init_) {
-        if (FARUtil::IsDebug) ROS_WARN("FARMaster: wait for v-graph to init before sending any goals");
+        if (FARUtil::IsDebug)
+            ROS_WARN("FARMaster: wait for v-graph to init before sending any goals");
         return;
     }
     Point3D goal_p(route_goal.point.x, route_goal.point.y, route_goal.point.z);
     const std::string goal_frame = route_goal.header.frame_id;
     if (!FARUtil::IsSameFrameID(goal_frame, master_params_.world_frame)) {
-        if (FARUtil::IsDebug) ROS_WARN_THROTTLE(1.0, "FARMaster: waypoint published is not on world frame!");
-        FARUtil::TransformPoint3DFrame(goal_frame, master_params_.world_frame, tf_listener_, goal_p);
+        if (FARUtil::IsDebug)
+            ROS_WARN_THROTTLE(1.0, "FARMaster: waypoint published is not on world frame!");
+        FARUtil::TransformPoint3DFrame(
+            goal_frame, master_params_.world_frame, tf_listener_, goal_p);
     }
     graph_planner_.UpdateGoal(goal_p);
     FARUtil::Timer.start_time("Overall_executing", true);
@@ -767,12 +830,12 @@ float FARUtil::robot_dim;
 float FARUtil::vehicle_height;
 float FARUtil::kLeafSize;
 float FARUtil::kHeightVoxel;
-float FARUtil::kNavClearDist;
+float FARUtil::kNavClearDist;  // 约0.4m，机器人尺寸的一半
 float FARUtil::kCellLength;
 float FARUtil::kCellHeight;
 float FARUtil::kNewPIThred;
-float FARUtil::kSensorRange;
-float FARUtil::kMarginDist;
+float FARUtil::kSensorRange;  // 半径30m
+float FARUtil::kMarginDist;  // 机器人传感器的最大感知半径减去障碍物匹配距离  30m - 0.8m
 float FARUtil::kMarginHeight;
 float FARUtil::kTerrainRange;
 float FARUtil::kLocalPlanRange;
@@ -782,7 +845,7 @@ double FARUtil::systemStartTime;
 float FARUtil::kObsDecayTime;
 float FARUtil::kNewDecayTime;
 float FARUtil::kNearDist;
-float FARUtil::kMatchDist;
+float FARUtil::kMatchDist;  // 大约1.6米 导航点和轮廓点匹配的最大距离
 float FARUtil::kProjectDist;
 int FARUtil::kDyObsThred;
 int FARUtil::KNewPointC;
@@ -799,12 +862,14 @@ DynamicGraphParams DynamicGraph::dg_params_;
 NodePtrStack DynamicGraph::globalGraphNodes_;
 std::size_t DynamicGraph::id_tracker_;
 std::unordered_map<std::size_t, NavNodePtr> DynamicGraph::idx_node_map_;
-std::unordered_map<NavNodePtr, std::pair<int, std::unordered_set<NavNodePtr>>> DynamicGraph::out_contour_nodes_map_;
+std::unordered_map<NavNodePtr, std::pair<int, std::unordered_set<NavNodePtr>>>
+    DynamicGraph::out_contour_nodes_map_;
 
 /* init static contour graph values */
 CTNodeStack ContourGraph::polys_ctnodes_;
 CTNodeStack ContourGraph::contour_graph_;
 PolygonStack ContourGraph::contour_polygons_;
+PolygonStack ContourGraph::steep_polygons_;
 std::vector<PointPair> ContourGraph::global_contour_;
 std::vector<PointPair> ContourGraph::unmatched_contour_;
 std::vector<PointPair> ContourGraph::inactive_contour_;
@@ -822,6 +887,8 @@ std::unordered_set<int> MapHandler::extend_obs_indices_;
 std::unique_ptr<grid_ns::Grid<PointCloudPtr>> MapHandler::world_free_cloud_grid_;
 std::unique_ptr<grid_ns::Grid<PointCloudPtr>> MapHandler::world_obs_cloud_grid_;
 std::unique_ptr<grid_ns::Grid<std::vector<float>>> MapHandler::terrain_height_grid_;
+std::unique_ptr<grid_ns::Grid<float>> MapHandler::terrain_avg_height_grid_;
+
 cv::Mat MapHandler::grad_x;
 cv::Mat MapHandler::grad_y;
 cv::Mat MapHandler::slope_mat;

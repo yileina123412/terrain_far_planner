@@ -522,8 +522,8 @@ void DPVisualizer::VizSteepSlopeClusters(
             cluster_marker_array.markers.push_back(inner_marker);
         }
 
-        ROS_INFO("Viz: Cluster %lu - boundary: %lu points (spheres), inner: %lu points (cubes)", i,
-            boundary_clusters[i].size(), inner_clusters[i].size());
+        // ROS_INFO("Viz: Cluster %lu - boundary: %lu points (spheres), inner: %lu points (cubes)", i,
+        //     boundary_clusters[i].size(), inner_clusters[i].size());
     }
 
     // 发布可视化
@@ -581,8 +581,8 @@ void DPVisualizer::VizModerateSlopeClusters(
             cluster_marker_array.markers.push_back(inner_marker);
         }
 
-        ROS_INFO("Viz: Moderate cluster %lu - boundary: %lu points (cylinders), inner: %lu points (cubes)", i,
-            boundary_clusters[i].size(), inner_clusters[i].size());
+        // ROS_INFO("Viz: Moderate cluster %lu - boundary: %lu points (cylinders), inner: %lu points (cubes)", i,
+        //     boundary_clusters[i].size(), inner_clusters[i].size());
     }
 
     // 发布可视化
@@ -624,7 +624,7 @@ void DPVisualizer::VizObstacleClusters(const std::vector<PointStack>& boundary_c
             cluster_marker_array.markers.push_back(boundary_marker);
         }
 
-        ROS_INFO("Viz: Obstacle cluster %lu - boundary: %lu points (cubes)", i, boundary_clusters[i].size());
+        // ROS_INFO("Viz: Obstacle cluster %lu - boundary: %lu points (cubes)", i, boundary_clusters[i].size());
     }
 
     // 发布可视化

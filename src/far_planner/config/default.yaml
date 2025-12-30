@@ -27,7 +27,7 @@ MapHandler/map_grad_max_height          : 100.0   # Unit: meter
 
 # Dynamic Planner Utility Params
 Util/angle_noise                        : 15.0 # Unit: degree
-Util/accept_max_align_angle             : 4.0  # Unit: degree
+Util/accept_max_align_angle             : 30.0  # Unit: degree   每个点的线的角度
 Util/obs_inflate_size                   : 1
 Util/new_intensity_thred                : 2.0
 Util/terrain_free_Z                     : 0.2

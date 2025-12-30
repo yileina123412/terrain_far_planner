@@ -13,7 +13,7 @@
 
 struct FARMasterParams {
     FARMasterParams() = default;
-    float robot_dim;
+    float robot_dim;  // 机器人物理尺寸，直径
     float vehicle_height;
     float voxel_dim;
     float sensor_range;
@@ -170,9 +170,13 @@ private:
     inline void FakeTerminalInit() {
         std::cout << std::endl;
         if (master_params_.is_static_env) {
-            std::cout << "\033[1;33m **************** STATIC ENV PLANNING **************** \033[0m\n" << std::endl;
+            std::cout
+                << "\033[1;33m **************** STATIC ENV PLANNING **************** \033[0m\n"
+                << std::endl;
         } else {
-            std::cout << "\033[1;33m **************** DYNAMIC ENV PLANNING **************** \033[0m\n" << std::endl;
+            std::cout
+                << "\033[1;33m **************** DYNAMIC ENV PLANNING **************** \033[0m\n"
+                << std::endl;
         }
         std::cout << "\n" << std::endl;
         if (!PreconditionCheck()) return;
@@ -202,8 +206,9 @@ private:
     void ScanCallBack(const sensor_msgs::PointCloud2ConstPtr& pc);
     void WaypointCallBack(const geometry_msgs::PointStamped& route_goal);
 
-    void ExtractDynamicObsFromScan(const PointCloudPtr& scanCloudIn, const PointCloudPtr& obsCloudIn,
-        const PointCloudPtr& freeCloudIn, const PointCloudPtr& dyObsCloudOut);
+    void ExtractDynamicObsFromScan(const PointCloudPtr& scanCloudIn,
+        const PointCloudPtr& obsCloudIn, const PointCloudPtr& freeCloudIn,
+        const PointCloudPtr& dyObsCloudOut);
 
     /* define inline functions */
     inline bool PreconditionCheck() {
